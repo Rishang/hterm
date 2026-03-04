@@ -1,0 +1,71 @@
+/* ============================================================
+   hterm — terminal.css
+   Default theme: Catppuccin Mocha
+   ============================================================ */
+
+:root {
+  --bg-primary: #1e1e2e;
+  --bg-surface: #181825;
+  --text-primary: #cdd6f4;
+  --text-subtle: #a6adc8;
+  --accent: #89b4fa;
+  --border: #313244;
+  --status-connected: #a6e3a1;
+  --status-disconnected: #f38ba8;
+  --status-connecting: #f9e2af;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+#terminal-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 4px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+#terminal {
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- xterm.js overrides ---- */
+.xterm {
+  width: 100%;
+  height: 100%;
+}
+
+.xterm-viewport {
+  background-color: transparent !important;
+  scrollbar-color: var(--text-subtle) var(--bg-primary);
+  scrollbar-width: thin;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--text-subtle);
+}

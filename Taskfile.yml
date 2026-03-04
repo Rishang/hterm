@@ -1,0 +1,40 @@
+version: "3"
+
+tasks:
+  ui:
+    desc: Build the Svelte UI
+    dir: ui
+    cmds:
+      - pnpm install
+      - pnpm run build
+    sources:
+      - src/**/*
+      - index.html
+      - package.json
+      - vite.config.js
+    generates:
+      - dist/**/*
+
+  build:
+    desc: Build the release binary
+    deps: [ui]
+    cmds:
+      - cargo build --release
+    sources:
+      - src/**/*.rs
+      - Cargo.toml
+      - Cargo.lock
+      - ui/dist/**/*
+    generates:
+      - target/release/hterm
+
+  dev:
+    desc: Run the dev server
+    cmds:
+      - cargo run -- -W
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - cargo clean
+      - cd ui && rm -rf dist node_modules
