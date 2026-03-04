@@ -22,6 +22,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -31,7 +43,7 @@ jobs:
         uses: taiki-e/install-action@cross
 
       - name: Build binary
-        run: cross build --release --target ${{ matrix.target }}
+        run: task build CARGO=cross -- --target ${{ matrix.target }}
 
       - name: Prepare binary for upload
         run: |
