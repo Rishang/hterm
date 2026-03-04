@@ -5,6 +5,7 @@ mod ws;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+use nix::libc;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -113,99 +114,64 @@ struct Cli {
     command: Vec<String>,
 }
 
+// current_thread: one OS thread, one ~2 MB stack.  All async awaits yield
+// correctly so multiple concurrent sessions are handled without parallelism.
+// multi_thread would spin up N×2 MB worker threads (N = num_cpus) for no gain
+// here, since the bottleneck is PTY I/O, not CPU.
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let cli = Cli::parse();
 
-    // Logging
     let filter = if cli.debug { "debug" } else { "info" };
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .compact()
         .init();
 
-    // Load config file, then apply CLI overrides
+    // Auto-reap child processes (PTY shells) the moment they exit.
+    // POSIX: setting SIGCHLD to SIG_IGN causes the kernel to reap children
+    // immediately, producing no zombies.  This is cheaper than any waitpid
+    // strategy and requires zero per-session overhead.
+    unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
+
     let mut cfg = AppConfig::load(&cli.config);
 
-    if let Some(p) = cli.port {
-        cfg.port = p;
-    }
-    if let Some(h) = cli.host {
-        cfg.host = h;
-    }
-    if let Some(s) = cli.shell {
-        cfg.shell = s;
-    }
-    if !cli.command.is_empty() {
-        cfg.shell = cli.command[0].clone();
-    }
-    if let Some(c) = cli.cwd {
-        cfg.cwd = c;
-    }
-    if let Some(t) = cli.terminal_type {
-        cfg.terminal_type = t;
-    }
-    if cli.writable {
-        cfg.writable = true;
-    }
-    if cli.readonly {
-        cfg.writable = false;
-    }
-    if let Some(m) = cli.max_clients {
-        cfg.max_clients = m;
-    }
-    if cli.once {
-        cfg.once = true;
-    }
-    if cli.exit_no_conn {
-        cfg.exit_no_conn = true;
-    }
-    if cli.check_origin {
-        cfg.check_origin = true;
-    }
-    if let Some(c) = cli.credential {
-        cfg.credential = c;
-    }
-    if let Some(b) = cli.base_path {
-        cfg.base_path = b.trim_end_matches('/').to_string();
-    }
-    if let Some(i) = cli.index {
-        cfg.index_path = i;
-    }
-    if let Some(p) = cli.ping_interval {
-        cfg.ping_interval = p;
-    }
-    if cli.ssl {
-        cfg.ssl = true;
-    }
-    if let Some(c) = cli.ssl_cert {
-        cfg.ssl_cert = c;
-    }
-    if let Some(k) = cli.ssl_key {
-        cfg.ssl_key = k;
-    }
+    if let Some(p) = cli.port          { cfg.port = p; }
+    if let Some(h) = cli.host          { cfg.host = h; }
+    if let Some(s) = cli.shell         { cfg.shell = s; }
+    if !cli.command.is_empty()          { cfg.shell = cli.command[0].clone(); }
+    if let Some(c) = cli.cwd           { cfg.cwd = c; }
+    if let Some(t) = cli.terminal_type { cfg.terminal_type = t; }
+    if cli.writable                     { cfg.writable = true; }
+    if cli.readonly                     { cfg.writable = false; }
+    if let Some(m) = cli.max_clients   { cfg.max_clients = m; }
+    if cli.once                         { cfg.once = true; }
+    if cli.exit_no_conn                 { cfg.exit_no_conn = true; }
+    if cli.check_origin                 { cfg.check_origin = true; }
+    if let Some(c) = cli.credential    { cfg.credential = c; }
+    if let Some(b) = cli.base_path     { cfg.base_path = b.trim_end_matches('/').to_string(); }
+    if let Some(i) = cli.index         { cfg.index_path = i; }
+    if let Some(p) = cli.ping_interval { cfg.ping_interval = p; }
+    if cli.ssl                          { cfg.ssl = true; }
+    if let Some(c) = cli.ssl_cert      { cfg.ssl_cert = c; }
+    if let Some(k) = cli.ssl_key       { cfg.ssl_key = k; }
 
-    // Validate shell
-    let shell_path = Path::new(&cfg.shell);
-    if !shell_path.exists() {
+    if !Path::new(&cfg.shell).exists() {
         tracing::error!("Shell not found: {}", cfg.shell);
         std::process::exit(1);
     }
-
-    // Validate cwd
     if !cfg.cwd.is_empty() && !Path::new(&cfg.cwd).is_dir() {
         tracing::error!("Working directory not valid: {}", cfg.cwd);
         std::process::exit(1);
     }
-
-    // SSL validation
     if cfg.ssl && (cfg.ssl_cert.is_empty() || cfg.ssl_key.is_empty()) {
         tracing::error!("SSL enabled but --ssl-cert and --ssl-key are required");
         std::process::exit(1);
     }
 
-    // Pre-serialize config response
-    let config_response: &'static str = Box::leak(
+    // Serialise config once at startup; leak for a 'static reference valid for the
+    // server's lifetime, avoiding per-request serialisation or Arc overhead.
+    let config_json: &'static str = Box::leak(
         serde_json::to_string(&ConfigResponse {
             theme: cfg.theme.clone(),
             writable: cfg.writable,
@@ -224,38 +190,21 @@ async fn main() {
 
     let bp = cfg.base_path.clone();
 
-    // Build router
     let app = Router::new()
-        .route(
-            &format!("{}/", bp),
-            get(serve_index),
-        )
-        .route(
-            &format!("{}/api/config", bp),
-            get(move || async move { serve_config(config_response).await }),
-        )
-        .route(&format!("{}/ws", bp), get(ws::ws_handler))
-        .route(
-            &format!("{}/static/{{*path}}", bp),
-            get(serve_asset),
-        )
+        .route(&format!("{}/", bp),                 get(serve_index))
+        .route(&format!("{}/api/config", bp),        get(move || async move { serve_config(config_json).await }))
+        .route(&format!("{}/ws", bp),                get(ws::ws_handler))
+        .route(&format!("{}/static/{{*path}}", bp), get(serve_asset))
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
         .expect("Invalid address");
 
-    tracing::info!(
-        "hterm v{} starting on http://{}{}",
-        VERSION,
-        addr,
-        bp
-    );
+    tracing::info!("hterm v{} starting on http://{}{}", VERSION, addr, bp);
     tracing::info!(
         "Shell: {} | Terminal: {} | Writable: {}",
-        cfg.shell,
-        cfg.terminal_type,
-        cfg.writable
+        cfg.shell, cfg.terminal_type, cfg.writable
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -263,15 +212,11 @@ async fn main() {
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             tokio::select! {
-                _ = signal::ctrl_c() => {
-                    tracing::info!("Received Ctrl+C, shutting down...");
-                }
+                _ = signal::ctrl_c() => tracing::info!("Received Ctrl+C, shutting down..."),
                 _ = async {
                     loop {
                         shutdown_rx.changed().await.ok();
-                        if *shutdown_rx.borrow() {
-                            break;
-                        }
+                        if *shutdown_rx.borrow() { break; }
                     }
                 } => {}
             }
@@ -282,37 +227,32 @@ async fn main() {
     tracing::info!("Server stopped");
 }
 
-async fn serve_index(axum::extract::State(state): axum::extract::State<Arc<AppState>>) -> impl IntoResponse {
+async fn serve_index(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> impl IntoResponse {
     let path = &state.config.index_path;
     if path.is_empty() {
-        // Serve embedded index.html
         if let Some(content) = Assets::get("index.html") {
             return axum::response::Html(content.data).into_response();
         }
-    } else {
-        // Serve from external file
-        if let Ok(content) = tokio::fs::read(path).await {
-            return axum::response::Html(content).into_response();
-        }
+    } else if let Ok(content) = tokio::fs::read(path).await {
+        return axum::response::Html(content).into_response();
     }
     StatusCode::NOT_FOUND.into_response()
 }
 
-async fn serve_asset(axum::extract::Path(path): axum::extract::Path<String>) -> impl IntoResponse {
-    if let Some(content) = Assets::get(&path) {
-        let mime = mime_guess::from_path(&path).first_or_octet_stream();
-        (
-            [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
-            content.data,
-        ).into_response()
-    } else {
-        StatusCode::NOT_FOUND.into_response()
+async fn serve_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match Assets::get(&path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(&path).first_or_octet_stream();
+            ([(axum::http::header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
 async fn serve_config(json: &'static str) -> impl IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+    ([(axum::http::header::CONTENT_TYPE, "application/json")], json)
 }

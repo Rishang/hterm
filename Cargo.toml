@@ -5,23 +5,24 @@ edition = "2021"
 description = "Share your terminal over the web"
 
 [dependencies]
-axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "io-util", "fs", "signal"] }
-mimalloc = "0.1"
-tower-http = { version = "0.6", features = ["fs"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-clap = { version = "4", features = ["derive"] }
-nix = { version = "0.29", features = ["term", "process", "signal"] }
-tracing = "0.1"
+axum        = { version = "0.8", features = ["ws"] }
+tokio       = { version = "1",   features = ["rt", "macros", "net", "sync", "time", "io-util", "fs", "signal"] }
+bytes       = "1"                            # explicit dep — transitive via axum/tokio; used directly in ws.rs
+mimalloc    = "0.1"
+serde       = { version = "1",   features = ["derive"] }
+serde_json  = "1"
+clap        = { version = "4",   features = ["derive"] }
+nix         = { version = "0.29", features = ["term", "process", "signal"] }
+tracing     = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-futures = "0.3"
-rust-embed = { version = "8.11.0", features = ["mime-guess"] }
-mime_guess = "2.0.5"
+futures     = "0.3"
+rust-embed  = { version = "8.11.0", features = ["mime-guess"] }
+mime_guess  = "2.0.5"
+# tower-http removed — was imported but never referenced in source
 
 [profile.release]
-opt-level = "z"     # optimize for size
-lto = true          # link-time optimization
-codegen-units = 1   # single codegen unit for max optimization
-panic = "abort"     # smaller binary, no unwinding
-strip = true        # strip debug symbols
+opt-level     = "z"     # optimise for binary size
+lto           = true    # link-time optimisation
+codegen-units = 1       # single CGU for maximum LTO effectiveness
+panic         = "abort"
+strip         = true

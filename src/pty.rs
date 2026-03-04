@@ -15,14 +15,13 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    /// Spawn a new shell in a PTY. Returns immediately; the child is running.
+    /// Spawn a new shell in a PTY. Returns immediately; the child runs asynchronously.
     pub fn spawn(shell: &str, cwd: &str, term_type: &str) -> io::Result<Self> {
         let OpenptyResult { master, slave } = openpty(None, None)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         match unsafe { unistd::fork() } {
             Ok(ForkResult::Child) => {
-                // Child process: set up session, dup slave fd, exec shell
                 drop(master);
                 unsafe {
                     libc::setsid();
@@ -37,11 +36,9 @@ impl PtySession {
                     let _ = std::env::set_current_dir(cwd);
                 }
 
-                let term = format!("TERM={}", term_type);
                 let c_shell = CString::new(shell).unwrap();
-                let c_term = CString::new(term).unwrap();
+                let c_term = CString::new(format!("TERM={}", term_type)).unwrap();
 
-                // Collect current env + TERM override
                 let mut env_vars: Vec<CString> = std::env::vars()
                     .filter(|(k, _)| k != "TERM")
                     .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())
@@ -54,10 +51,12 @@ impl PtySession {
             Ok(ForkResult::Parent { child }) => {
                 drop(slave);
 
-                // Set master fd to non-blocking for async I/O
+                // Set master fd to non-blocking for async I/O.
                 let raw = master.as_raw_fd();
-                let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
-                unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+                unsafe {
+                    let flags = libc::fcntl(raw, libc::F_GETFL);
+                    libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
 
                 let async_fd = AsyncFd::new(master)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -71,7 +70,7 @@ impl PtySession {
         }
     }
 
-    /// Read from the PTY (non-blocking, async).
+    /// Read from the PTY master (async, non-blocking).
     pub async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.master.ready(Interest::READABLE).await?;
@@ -83,11 +82,7 @@ impl PtySession {
                         buf.len(),
                     )
                 };
-                if n < 0 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(n as usize)
-                }
+                if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
             }) {
                 Ok(result) => return result,
                 Err(_would_block) => continue,
@@ -95,7 +90,7 @@ impl PtySession {
         }
     }
 
-    /// Write data to the PTY (sends input to the shell).
+    /// Write data to the PTY master (sends keystrokes to the shell).
     pub async fn write(&self, data: &[u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.master.ready(Interest::WRITABLE).await?;
@@ -107,11 +102,7 @@ impl PtySession {
                         data.len(),
                     )
                 };
-                if n < 0 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(n as usize)
-                }
+                if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
             }) {
                 Ok(result) => return result,
                 Err(_would_block) => continue,
@@ -121,25 +112,17 @@ impl PtySession {
 
     /// Resize the PTY window.
     pub fn resize(&self, rows: u16, cols: u16) -> io::Result<()> {
-        let ws = Winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let raw = self.master.as_raw_fd();
-        let ret = unsafe { libc::ioctl(raw, libc::TIOCSWINSZ, &ws) };
-        if ret < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+        let ws = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+        let ret = unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
+        if ret < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
     }
 }
 
 impl Drop for PtySession {
     fn drop(&mut self) {
+        // SIGCHLD is set to SIG_IGN at startup (see main.rs), so the kernel
+        // auto-reaps this child the moment it exits.  We only need to send
+        // SIGHUP to ask the shell to terminate; no waitpid is required.
         let _ = signal::kill(self.child_pid, Signal::SIGHUP);
-        let _ = nix::sys::wait::waitpid(self.child_pid, None);
     }
 }
