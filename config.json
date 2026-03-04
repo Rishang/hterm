@@ -1,6 +1,6 @@
 {
   "port": 7681,
-  "shell": "/bin/zsh",
+  "shell": "/bin/bash",
   "theme": {
     "background": "#1e1e2e",
     "foreground": "#cdd6f4",
@@ -25,6 +25,6 @@
     "brightCyan": "#94e2d5",
     "brightWhite": "#a6adc8",
     "fontFamily": "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-    "fontSize": 15
+    "fontSize": 16
   }
 }
