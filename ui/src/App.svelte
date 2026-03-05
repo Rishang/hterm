@@ -25,6 +25,7 @@
   let pendingOutput = [];
   let rafScheduled = false;
   let resizeObserver = null;
+  let isPasting = false;
 
   const decoder = new TextDecoder();
 
@@ -174,16 +175,25 @@
     });
     resizeObserver.observe(terminalContainer);
 
-    term.onData((data) => sendInput(data));
+    term.onData((data) => {
+      if (isPasting) return;
+      sendInput(data);
+    });
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       if (e.ctrlKey && e.shiftKey) {
         if (e.key === "V" || e.key === "v") {
+          isPasting = true;
           navigator.clipboard
             .readText()
-            .then((text) => sendInput(text))
-            .catch((err) => console.warn("Clipboard read failed:", err));
+            .then((text) => {
+              sendInput(text);
+            })
+            .catch((err) => console.warn("Clipboard read failed:", err))
+            .finally(() => {
+              isPasting = false;
+            });
           return false;
         }
         if (e.key === "C" || e.key === "c") {
