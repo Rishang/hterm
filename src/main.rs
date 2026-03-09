@@ -3,7 +3,8 @@ mod pty;
 mod ws;
 
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
