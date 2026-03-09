@@ -1,5 +1,7 @@
 # hterm
 
+A simple terminal server for the web. Inspired by [ttyd](https://github.com/tsl0922/ttyd).
+
 <img src=".github/images/hterm.png" alt="hterm screenshot" />
 
 ## Install
