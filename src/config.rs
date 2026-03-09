@@ -85,7 +85,7 @@ impl Default for ThemeConfig {
             bright_cyan:         Some("#56b6c2".into()),
             bright_white:        Some("#ffffff".into()),
             font_family:         Some("'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace".into()),
-            font_size:           Some(16),
+            font_size:           Some(14),
         }
     }
 }

@@ -26,6 +26,7 @@
   let rafScheduled = false;
   let resizeObserver = null;
   let isPasting = false;
+  let viewportResizeHandler = null;
 
   const decoder = new TextDecoder();
 
@@ -144,6 +145,10 @@
       scrollback: 10000,
       tabStopWidth: 4,
       allowProposedApi: true,
+      wordWrap: true,
+      theme: {
+        background: "#1e1e2e",
+      },
     };
 
     term = new Terminal(termOptions);
@@ -163,17 +168,24 @@
 
     term.open(terminalContainer);
 
-    // Use ResizeObserver to reliably detect when the component actually hits the DOM with full CSS applied
-    resizeObserver = new ResizeObserver(() => {
+    function scheduleFit() {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        try {
-          fitAddon.fit();
-        } catch (e) {}
+        try { fitAddon.fit(); } catch { /* ignore */ }
         resizeTimer = null;
       }, RESIZE_DEBOUNCE_MS);
-    });
+    }
+
+    // ResizeObserver on the container catches element-level size changes
+    resizeObserver = new ResizeObserver(scheduleFit);
     resizeObserver.observe(terminalContainer);
+
+    // visualViewport fires after the browser fully commits the new layout,
+    // which is more reliable than window resize for orientation changes
+    if (window.visualViewport) {
+      viewportResizeHandler = scheduleFit;
+      window.visualViewport.addEventListener("resize", viewportResizeHandler);
+    }
 
     term.onData((data) => {
       if (isPasting) return;
@@ -231,6 +243,8 @@
       if (themeConfig.fontFamily)
         term.options.fontFamily = themeConfig.fontFamily;
       if (themeConfig.fontSize) term.options.fontSize = themeConfig.fontSize;
+      // Re-fit after font changes since cell dimensions may have changed
+      try { fitAddon.fit(); } catch { /* ignore */ }
     });
   }
 
@@ -312,6 +326,9 @@
     if (resizeTimer) clearTimeout(resizeTimer);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (resizeObserver) resizeObserver.disconnect();
+    if (viewportResizeHandler && window.visualViewport) {
+      window.visualViewport.removeEventListener("resize", viewportResizeHandler);
+    }
     if (term) term.dispose();
   });
 </script>
