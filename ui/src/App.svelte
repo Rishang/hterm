@@ -168,20 +168,23 @@
 
     term.open(terminalContainer);
 
+    function doFit() {
+      try { fitAddon.fit(); } catch { /* ignore */ }
+    }
+
     function scheduleFit() {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        try { fitAddon.fit(); } catch { /* ignore */ }
+        doFit();
         resizeTimer = null;
       }, RESIZE_DEBOUNCE_MS);
     }
 
-    // ResizeObserver on the container catches element-level size changes
+    // ResizeObserver handles window/element resizes after initial load
     resizeObserver = new ResizeObserver(scheduleFit);
     resizeObserver.observe(terminalContainer);
 
-    // visualViewport fires after the browser fully commits the new layout,
-    // which is more reliable than window resize for orientation changes
+    // visualViewport covers orientation changes and mobile keyboard events
     if (window.visualViewport) {
       viewportResizeHandler = scheduleFit;
       window.visualViewport.addEventListener("resize", viewportResizeHandler);
@@ -227,13 +230,17 @@
     term.options.cursorBlink = true;
     term.focus();
 
-    // Svelte's DOM pipeline sometimes rejects focus if called too early
-    setTimeout(() => {
-      term.options.cursorBlink = true;
-      term.focus();
-    }, 100);
-
-    connect();
+    // Fit first, then connect — ensures PTY receives correct cols/rows on first open.
+    // rAF guarantees the browser has committed the layout before we measure.
+    requestAnimationFrame(() => {
+      doFit();
+      connect();
+      // Second pass after WebGL/font init may have shifted cell size
+      setTimeout(() => {
+        doFit();
+        term.focus();
+      }, 150);
+    });
 
     // Load config lazily so it doesn't block terminal rendering
     loadConfig().then((config) => {
@@ -269,7 +276,12 @@
 
     ws.onopen = () => {
       reconnectDelay = RECONNECT_DELAY_MS;
-      if (fitAddon) fitAddon.fit();
+      // Fit to get accurate cols/rows, then immediately push the size to the PTY
+      // so TUI apps (htop, vim, etc.) start with the correct dimensions.
+      if (fitAddon) {
+        try { fitAddon.fit(); } catch { /* ignore */ }
+      }
+      if (term) sendResize(term.cols, term.rows);
     };
 
     ws.onmessage = (event) => {
