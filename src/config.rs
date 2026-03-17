@@ -217,14 +217,6 @@ pub struct AppConfig {
 
     // ── Terminal feature hints (forwarded to the frontend) ────────────────────
 
-    /// Tell the frontend to activate its ZMODEM/trzsz file-transfer addon.
-    ///
-    /// The actual ZMODEM binary protocol passes through the PTY transparently;
-    /// this flag is purely a hint so the client-side JS loads the right addon.
-    /// Requires `lrzsz` (or `trzsz`) installed on the server.
-    #[serde(default)]
-    pub zmodem: bool,
-
     /// Tell the frontend to enable Sixel graphics support in xterm.js.
     ///
     /// Sixel escape sequences pass through the PTY transparently; this flag
@@ -268,7 +260,6 @@ impl Default for AppConfig {
             ssl:           false,
             ssl_cert:      String::new(),
             ssl_key:       String::new(),
-            zmodem:        false,
             sixel:         false,
             theme:         ThemeConfig::default(),
         }
@@ -298,8 +289,6 @@ impl AppConfig {
 pub struct ConfigResponse {
     pub theme:    ThemeConfig,
     pub writable: bool,
-    /// Whether to activate the ZMODEM/trzsz addon in xterm.js.
-    pub zmodem:   bool,
     /// Whether to activate the Sixel graphics addon in xterm.js.
     pub sixel:    bool,
     /// Whether the server will honour `?arg=` query parameters on the WS URL.

@@ -6,16 +6,19 @@ mod ws;
 // static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::get;
-use axum::Router;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use axum_server::Handle;
 use clap::Parser;
 use rust_embed::Embed;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
 use tokio::signal;
 
 #[cfg(unix)]
@@ -149,12 +152,6 @@ struct Cli {
 
     // ── Terminal features ─────────────────────────────────────────────────────
 
-    /// Activate the ZMODEM/trzsz file-transfer addon in the frontend.
-    /// The protocol passes through the PTY transparently; requires lrzsz or
-    /// trzsz to be installed on the server.
-    #[arg(short = 'z', long = "zmodem")]
-    zmodem: bool,
-
     /// Enable Sixel graphics support in the xterm.js frontend
     #[arg(long = "sixel")]
     sixel: bool,
@@ -226,7 +223,6 @@ async fn main() {
     if cli.ssl                         { cfg.ssl           = true; }
     if let Some(c) = cli.ssl_cert      { cfg.ssl_cert      = c; }
     if let Some(k) = cli.ssl_key       { cfg.ssl_key       = k; }
-    if cli.zmodem                      { cfg.zmodem        = true; }
     if cli.sixel                       { cfg.sixel         = true; }
 
     // ── Validation ────────────────────────────────────────────────────────────
@@ -266,7 +262,6 @@ async fn main() {
         serde_json::to_string(&ConfigResponse {
             theme:    cfg.theme.clone(),
             writable: cfg.writable,
-            zmodem:   cfg.zmodem,
             sixel:    cfg.sixel,
             url_arg:  cfg.url_arg,
         })
@@ -290,6 +285,7 @@ async fn main() {
     let app = Router::new()
         .route(&format!("{}/",                 bp), get(serve_index))
         .route(&format!("{}/api/config",        bp), get(move || async move { serve_config(config_json).await }))
+        .route(&format!("{}/exec",              bp), post(serve_exec))
         .route(&format!("{}/ws",                bp), get(ws::ws_handler))
         .route(&format!("{}/static/{{*path}}",  bp), get(serve_asset))
         .with_state(state);
@@ -469,6 +465,99 @@ async fn serve_asset(
 
 async fn serve_config(json: &'static str) -> impl IntoResponse {
     ([(axum::http::header::CONTENT_TYPE, "application/json")], json)
+}
+
+#[derive(Deserialize)]
+struct ExecPayload {
+    cmd: String,
+}
+
+#[derive(Serialize)]
+struct ExecResponse {
+    stdout: String,
+    stderr: String,
+    status: Option<i32>,
+}
+
+async fn serve_exec(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ExecPayload>,
+) -> impl IntoResponse {
+    let cfg = &state.config;
+
+    // Optional auth check, reusing WS logic
+    if !cfg.auth_header.is_empty() {
+        if headers.get(cfg.auth_header.as_str()).is_none() {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    } else if let Some(ref expected) = state.expected_auth {
+        if !ws::check_basic_auth(&headers, expected) {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    }
+
+    let mut command = Command::new(&cfg.shell);
+    command.arg("-c");
+    command.arg(&payload.cmd);
+    
+    // Attempt privilege drop to match CLI
+    #[cfg(unix)]
+    if let Some(uid) = cfg.uid {
+        command.uid(uid);
+    }
+    #[cfg(unix)]
+    if let Some(gid) = cfg.gid {
+        command.gid(gid);
+    }
+    
+    // Set cwd
+    if !cfg.cwd.is_empty() {
+        command.current_dir(&cfg.cwd);
+    }
+
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+
+    match command.spawn() {
+        Ok(mut child) => {
+            let stdout_opt = child.stdout.take();
+            let stderr_opt = child.stderr.take();
+
+            let stdout_fut = async {
+                let mut buf = Vec::new();
+                if let Some(mut out) = stdout_opt {
+                    let _ = out.read_to_end(&mut buf).await;
+                }
+                buf
+            };
+
+            let stderr_fut = async {
+                let mut buf = Vec::new();
+                if let Some(mut err) = stderr_opt {
+                    let _ = err.read_to_end(&mut buf).await;
+                }
+                buf
+            };
+
+            let (stdout_bytes, stderr_bytes) = tokio::join!(stdout_fut, stderr_fut);
+
+            let res = ExecResponse {
+                stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
+                stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
+                status: None, // Cannot get reliable exit code because SIGCHLD == SIG_IGN
+            };
+            (StatusCode::OK, Json(res)).into_response()
+        }
+        Err(e) => {
+            let res = ExecResponse {
+                stdout: String::new(),
+                stderr: e.to_string(),
+                status: None,
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(res)).into_response()
+        }
+    }
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

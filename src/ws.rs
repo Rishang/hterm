@@ -388,7 +388,7 @@ async fn apply_cmd(cmd: Option<PtyCmd>, session: &PtySession) -> bool {
 /// `expected` is the full `"Basic <base64(user:pass)>"` string built once at
 /// startup — this function performs a single string comparison with no
 /// allocations or decoding.
-fn check_basic_auth(headers: &HeaderMap, expected: &str) -> bool {
+pub fn check_basic_auth(headers: &HeaderMap, expected: &str) -> bool {
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
