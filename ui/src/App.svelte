@@ -25,7 +25,6 @@
   let pendingOutput = [];
   let rafScheduled = false;
   let resizeObserver = null;
-  let isPasting = false;
   let viewportResizeHandler = null;
 
   const decoder = new TextDecoder();
@@ -146,6 +145,9 @@
       tabStopWidth: 4,
       allowProposedApi: true,
       wordWrap: true,
+      // Enable bracketed paste so TUIs (vim, shells, etc.) can treat large
+      // pastes as a single operation instead of a long keystroke stream.
+      bracketedPasteMode: true,
       theme: {
         background: "#1e1e2e",
       },
@@ -191,7 +193,7 @@
     }
 
     term.onData((data) => {
-      if (isPasting) return;
+      // Forward all data, including bracketed paste sequences, to the server.
       sendInput(data);
     });
 
@@ -199,19 +201,24 @@
       if (e.type !== "keydown") return true;
       if (e.ctrlKey && e.shiftKey) {
         if (e.key === "V" || e.key === "v") {
-          isPasting = true;
+          e.preventDefault();
           navigator.clipboard
             .readText()
             .then((text) => {
-              sendInput(text);
+              if (!text) return;
+              if (typeof term.paste === "function") {
+                // Use xterm's paste helper so bracketedPasteMode is honoured.
+                term.paste(text);
+              } else {
+                // Fallback for older xterm versions.
+                sendInput(text);
+              }
             })
-            .catch((err) => console.warn("Clipboard read failed:", err))
-            .finally(() => {
-              isPasting = false;
-            });
+            .catch((err) => console.warn("Clipboard read failed:", err));
           return false;
         }
         if (e.key === "C" || e.key === "c") {
+          e.preventDefault();
           const sel = term.getSelection();
           if (sel) {
             navigator.clipboard
