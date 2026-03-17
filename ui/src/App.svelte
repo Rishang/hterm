@@ -26,6 +26,8 @@
   let rafScheduled = false;
   let resizeObserver = null;
   let viewportResizeHandler = null;
+  let clipboardReadGranted = false;
+  let clipboardWriteGranted = false;
 
   const decoder = new TextDecoder();
 
@@ -201,6 +203,15 @@
       if (e.type !== "keydown") return true;
       if (e.ctrlKey && e.shiftKey) {
         if (e.key === "V" || e.key === "v") {
+          if (
+            !clipboardReadGranted ||
+            !navigator.clipboard ||
+            typeof navigator.clipboard.readText !== "function"
+          ) {
+            // Let the browser handle the shortcut so we don't trigger
+            // a clipboard permission prompt from script.
+            return true;
+          }
           e.preventDefault();
           navigator.clipboard
             .readText()
@@ -218,6 +229,15 @@
           return false;
         }
         if (e.key === "C" || e.key === "c") {
+          if (
+            !clipboardWriteGranted ||
+            !navigator.clipboard ||
+            typeof navigator.clipboard.writeText !== "function"
+          ) {
+            // Let the browser handle the shortcut so we don't trigger
+            // a clipboard permission prompt from script.
+            return true;
+          }
           e.preventDefault();
           const sel = term.getSelection();
           if (sel) {
@@ -334,6 +354,32 @@
 
   onMount(() => {
     init();
+    // Probe clipboard permissions without triggering prompts; we only
+    // use the Clipboard API when permission has already been granted.
+    try {
+      if (navigator.permissions && navigator.clipboard) {
+        navigator.permissions
+          .query({ name: "clipboard-read" })
+          .then((status) => {
+            clipboardReadGranted = status.state === "granted";
+            status.onchange = () => {
+              clipboardReadGranted = status.state === "granted";
+            };
+          })
+          .catch(() => {});
+        navigator.permissions
+          .query({ name: "clipboard-write" })
+          .then((status) => {
+            clipboardWriteGranted = status.state === "granted";
+            status.onchange = () => {
+              clipboardWriteGranted = status.state === "granted";
+            };
+          })
+          .catch(() => {});
+      }
+    } catch {
+      // If Permissions API is unavailable, fall back to browser defaults.
+    }
   });
 
   onDestroy(() => {
