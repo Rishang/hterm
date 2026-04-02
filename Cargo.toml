@@ -8,7 +8,7 @@ description = "Share your terminal over the web"
 # axum-server provides real TLS via rustls — no OpenSSL dependency required.
 axum        = { version = "0.8",  features = ["ws"] }
 axum-server = { version = "0.7",  features = ["tls-rustls"] }
-tokio       = { version = "1",    features = ["rt", "macros", "net", "sync", "time", "io-util", "fs", "signal", "process"] }
+tokio       = { version = "1",    features = ["rt", "macros", "net", "sync", "time", "io-util", "io-std", "fs", "signal", "process"] }
 bytes       = "1"                            # zero-copy slices; used directly in ws.rs
 snmalloc-rs = "0.3"
 serde       = { version = "1",    features = ["derive"] }

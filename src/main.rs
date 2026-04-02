@@ -1,4 +1,5 @@
 mod config;
+mod mcp;
 mod pty;
 mod ws;
 
@@ -166,6 +167,13 @@ struct Cli {
     #[arg(long, default_value = "config.json")]
     config: String,
 
+    /// Run as an MCP (Model Context Protocol) server over stdio instead of
+    /// starting the HTTP/WebSocket terminal server.  AI clients such as
+    /// Claude Desktop connect to hterm by launching it with this flag and
+    /// communicating via JSON-RPC 2.0 on stdin/stdout.
+    #[arg(long = "mcp")]
+    mcp: bool,
+
     /// Optional command to run instead of the configured shell (positional)
     #[arg(trailing_var_arg = true)]
     command: Vec<String>,
@@ -234,6 +242,13 @@ async fn main() {
         tracing::error!("Working directory not valid: {}", cfg.cwd);
         std::process::exit(1);
     }
+
+    // ── MCP mode: bypass HTTP server entirely ─────────────────────────────────
+    if cli.mcp {
+        mcp::run_mcp_server(cfg).await;
+        return;
+    }
+
     if cfg.ssl && (cfg.ssl_cert.is_empty() || cfg.ssl_key.is_empty()) {
         tracing::error!("--ssl requires both --ssl-cert and --ssl-key");
         std::process::exit(1);
