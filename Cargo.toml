@@ -24,6 +24,7 @@ rust-embed  = { version = "8",    features = ["mime-guess"] }
 mime_guess  = "2"
 uuid = { version = "1.23.0", default-features = false, features = ["v4"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
+infer = "0.16"  # File type detection from magic bytes
 
 [profile.release]
 opt-level     = "z"     # optimise for binary size

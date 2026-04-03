@@ -51,7 +51,7 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 ### 🤖 **AI Integration**
 - **MCP Server** built-in
 - REST API for automation
-- 8+ MCP tools included
+- 8 MCP tools included
 - Server-Sent Events (SSE)
 
 </td>
@@ -62,14 +62,14 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 
 | Tool | Description |
 |------|-------------|
-| `run_command` | Execute shell commands with timeout |
-| `read_file` | Read file contents |
-| `write_file` | Write files to disk |
-| `list_files` | Directory listings |
-| `list_tree` | Recursive directory tree |
-| `list_processes` | Running processes |
-| `count_file_lines` | Count lines in files |
-| `read_file_size` | Get file size |
+| `bash` | Execute bash commands with verbose mode (set -x) |
+| `read_file` | Read file contents as UTF-8 text |
+| `write_file` | Create or overwrite files (max 100MB) |
+| `edit_file` | Edit files by replacing exact text matches |
+| `read_file_metadata` | Get file size, permissions, type, MIME, encoding, format |
+| `list_files` | Detailed directory listings (ls -la) |
+| `list_tree` | Recursive directory tree with depth control |
+| `list_processes` | Running processes (ps aux) |
 
 ---
 
@@ -302,14 +302,26 @@ curl -X POST http://localhost:7681/api/tools/call \
     "arguments": {"path": "/etc/hostname"}
   }'
 
-# Run command with timeout via tools API
+# Run bash command with timeout
 curl -X POST http://localhost:7681/api/tools/call \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "run_command",
+    "name": "bash",
     "arguments": {
-      "command": "find /var/log -name '*.log' | head -10",
-      "timeout_secs": 30
+      "command": "find /var/log -name '\''*.log'\'' | head -10",
+      "timeout": 30
+    }
+  }'
+
+# Edit a file
+curl -X POST http://localhost:7681/api/tools/call \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "edit_file",
+    "arguments": {
+      "path": "config.js",
+      "oldText": "port: 3000",
+      "newText": "port: 8080"
     }
   }'
 ```
