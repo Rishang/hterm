@@ -201,11 +201,12 @@ async fn main() {
         .compact()
         .init();
 
-    // ── SIGCHLD → SIG_IGN (Unix only) ────────────────────────────────────────
-    // Causes the kernel to auto-reap child processes the moment they exit,
-    // producing no zombies and requiring no waitpid per session.
-    #[cfg(unix)]
-    unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
+    // ── Child Process Reaping ──────────────────────────────────────────────────
+    // Tokio handles all child process reaping via:
+    //   • Linux ≥5.3: pidfd_open(2) - independent of SIGCHLD
+    //   • Older/macOS: installs its own SIGCHLD handler via sigaction
+    // Manual SIGCHLD = SIG_IGN creates race conditions with tokio::process::Command.
+    // Let tokio handle it - no manual signal setup needed.
 
     // ── Config: JSON file first, then CLI overrides ───────────────────────────
     let mut cfg = AppConfig::load(&cli.config);
@@ -593,10 +594,12 @@ async fn serve_exec(
 
             let (stdout_bytes, stderr_bytes) = tokio::join!(stdout_fut, stderr_fut);
 
+            // Note: We don't call child.wait() to get exit status because we
+            // already consumed stdout/stderr. The child is reaped by tokio automatically.
             let res = ExecResponse {
                 stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
                 stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
-                status: None, // Cannot get reliable exit code because SIGCHLD == SIG_IGN
+                status: None, // Exit status not captured (stdout/stderr already consumed)
             };
             (StatusCode::OK, Json(res)).into_response()
         }

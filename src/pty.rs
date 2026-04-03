@@ -221,8 +221,8 @@ impl PtySession {
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // SIGCHLD == SIG_IGN: the kernel auto-reaps on exit, so we only need
-        // SIGHUP to ask the shell to terminate gracefully.
+        // Send SIGHUP to ask the shell to terminate gracefully.
+        // Tokio's runtime will handle reaping the child process.
         let _ = signal::kill(self.child_pid, Signal::SIGHUP);
     }
 }
