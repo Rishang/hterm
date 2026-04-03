@@ -132,7 +132,7 @@ pub struct AppConfig {
 
     /// Allow clients to write keystrokes to the TTY (read-only by default for
     /// safety, matching ttyd's `-W` / `--writable` convention).
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub writable: bool,
 
     /// Maximum concurrent clients (0 = unlimited).
@@ -232,7 +232,6 @@ fn default_port()          -> u16    { 7681 }
 fn default_host()          -> String { "127.0.0.1".into() }
 fn default_shell()         -> String { std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into()) }
 fn default_terminal_type() -> String { "xterm-256color".into() }
-fn default_true()          -> bool   { true }
 fn default_ping_interval() -> u64    { 5 }
 
 impl Default for AppConfig {
@@ -244,7 +243,7 @@ impl Default for AppConfig {
             shell:         default_shell(),
             cwd:           String::new(),
             terminal_type: default_terminal_type(),
-            writable:      true,
+            writable:      false,
             max_clients:   0,
             once:          false,
             exit_no_conn:  false,

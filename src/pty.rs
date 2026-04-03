@@ -87,20 +87,37 @@ impl PtySession {
                 drop(slave);
 
                 if !cwd.is_empty() {
-                    let _ = std::env::set_current_dir(cwd);
+                    if let Err(e) = std::env::set_current_dir(cwd) {
+                        eprintln!("PTY: Failed to chdir to '{}': {}", cwd, e);
+                        std::process::exit(1);
+                    }
                 }
 
                 // ── Privilege drop ─────────────────────────────────────────────
                 // GID must be dropped first while we still have the privilege to do so.
                 if let Some(g) = gid {
-                    unsafe { libc::setgid(g); }
+                    let ret = unsafe { libc::setgid(g) };
+                    if ret != 0 {
+                        eprintln!("PTY: Failed to setgid({}): {}", g, std::io::Error::last_os_error());
+                        std::process::exit(1);
+                    }
                 }
                 if let Some(u) = uid {
-                    unsafe { libc::setuid(u); }
+                    let ret = unsafe { libc::setuid(u) };
+                    if ret != 0 {
+                        eprintln!("PTY: Failed to setuid({}): {}", u, std::io::Error::last_os_error());
+                        std::process::exit(1);
+                    }
                 }
 
                 // ── Build argv ─────────────────────────────────────────────────
-                let c_shell = CString::new(shell).unwrap_or_else(|_| CString::new("/bin/sh").unwrap());
+                let c_shell = match CString::new(shell) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        eprintln!("PTY: Shell path contains invalid characters: {}", shell);
+                        std::process::exit(1);
+                    }
+                };
 
                 // argv[0] is the shell path; the rest come from URL ?arg= params.
                 let mut argv: Vec<CString> = Vec::with_capacity(1 + shell_args.len());

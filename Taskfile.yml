@@ -19,12 +19,14 @@ tasks:
     desc: Build the release binary
     deps: [ui]
     cmds:
+      - cp openapi.yaml ui/dist/openapi.yaml
       - '{{default "cargo" .CARGO}} build --release {{.CLI_ARGS}}'
     sources:
       - src/**/*.rs
       - Cargo.toml
       - Cargo.lock
       - ui/dist/**/*
+      - openapi.yaml
     generates:
       - target/release/hterm
 

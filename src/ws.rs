@@ -115,8 +115,11 @@ pub async fn ws_handler(
     }
 
     // ── Client-limit + once-mode guard ────────────────────────────────────────
-    let current = state.client_count.load(std::sync::atomic::Ordering::Relaxed);
-    if (cfg.max_clients > 0 && current >= cfg.max_clients) || (cfg.once && current > 0) {
+    // Use fetch_add to atomically check and increment, avoiding race conditions
+    let previous = state.client_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if (cfg.max_clients > 0 && previous >= cfg.max_clients) || (cfg.once && previous > 0) {
+        // Revert the increment since we're rejecting this connection
+        state.client_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
@@ -167,7 +170,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
     let ping_interval = Duration::from_secs(cfg.ping_interval);
     let writable      = cfg.writable;
 
-    state.client_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Count was already incremented in ws_handler, just read it for logging
     let count = state.client_count.load(std::sync::atomic::Ordering::Relaxed);
     tracing::info!(
         shell    = %cfg.shell,

@@ -1,6 +1,8 @@
 mod config;
 mod mcp;
 mod pty;
+mod rest;
+mod tools;
 mod ws;
 
 #[global_allocator]
@@ -298,13 +300,23 @@ async fn main() {
     let bp = cfg.base_path.clone();
 
     let app = Router::new()
+        // UI & Documentation
         .route(&format!("{}/",                 bp), get(serve_index))
+        .route(&format!("{}/openapi.json",      bp), get(serve_openapi))
+        .route(&format!("{}/static/{{*path}}",  bp), get(serve_asset))
+
+        // REST API namespace
         .route(&format!("{}/api/config",        bp), get(move || async move { serve_config(config_json).await }))
-        .route(&format!("{}/exec",              bp), post(serve_exec))
+        .route(&format!("{}/api/exec",          bp), post(serve_exec))
+        .nest(&format!("{}/api/tools",          bp), rest::router())
+
+        // WebSocket (industry standard convention)
         .route(&format!("{}/ws",                bp), get(ws::ws_handler))
+
+        // MCP Protocol namespace
         .route(&format!("{}/mcp/sse",           bp), get(mcp::mcp_sse_handler))
         .route(&format!("{}/mcp/message",       bp), post(mcp::mcp_message_handler))
-        .route(&format!("{}/static/{{*path}}",  bp), get(serve_asset))
+
         .with_state(state);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
@@ -484,6 +496,34 @@ async fn serve_config(json: &'static str) -> impl IntoResponse {
     ([(axum::http::header::CONTENT_TYPE, "application/json")], json)
 }
 
+async fn serve_openapi() -> impl IntoResponse {
+    match Assets::get("openapi.yaml") {
+        Some(content) => {
+            let yaml_str = std::str::from_utf8(&content.data).unwrap_or("{}");
+            // Parse YAML and convert to JSON for better API compatibility
+            match serde_yaml::from_str::<serde_json::Value>(yaml_str) {
+                Ok(json_value) => {
+                    let json_str = serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "{}".to_string());
+                    (
+                        StatusCode::OK,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        json_str
+                    ).into_response()
+                }
+                Err(_) => {
+                    // Fallback: serve as YAML if JSON conversion fails
+                    (
+                        StatusCode::OK,
+                        [(axum::http::header::CONTENT_TYPE, "application/x-yaml")],
+                        yaml_str.to_string()
+                    ).into_response()
+                }
+            }
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 #[derive(Deserialize)]
 struct ExecPayload {
     cmd: String,
@@ -503,15 +543,9 @@ async fn serve_exec(
 ) -> impl IntoResponse {
     let cfg = &state.config;
 
-    // Optional auth check, reusing WS logic
-    if !cfg.auth_header.is_empty() {
-        if headers.get(cfg.auth_header.as_str()).is_none() {
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
-    } else if let Some(ref expected) = state.expected_auth {
-        if !ws::check_basic_auth(&headers, expected) {
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
+    // Use unified auth check
+    if !tools::check_auth(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
 
     let mut command = Command::new(&cfg.shell);
