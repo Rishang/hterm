@@ -194,6 +194,7 @@ async fn main() {
 
     // ── Logging ───────────────────────────────────────────────────────────────
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(if cli.debug { "debug" } else { "info" })
         .compact()
         .init();
@@ -243,10 +244,8 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // ── MCP mode: bypass HTTP server entirely ─────────────────────────────────
     if cli.mcp {
-        mcp::run_mcp_server(cfg).await;
-        return;
+        tracing::info!("Note: --mcp flag used, but MCP is now served over the main HTTP server via SSE (port: {}).", cfg.port);
     }
 
     if cfg.ssl && (cfg.ssl_cert.is_empty() || cfg.ssl_key.is_empty()) {
@@ -292,6 +291,7 @@ async fn main() {
         client_count:  std::sync::atomic::AtomicU32::new(0),
         shutdown_tx,
         expected_auth,
+        mcp_transmitters: tokio::sync::RwLock::new(std::collections::HashMap::new()),
     });
 
     // ── Router ────────────────────────────────────────────────────────────────
@@ -302,6 +302,8 @@ async fn main() {
         .route(&format!("{}/api/config",        bp), get(move || async move { serve_config(config_json).await }))
         .route(&format!("{}/exec",              bp), post(serve_exec))
         .route(&format!("{}/ws",                bp), get(ws::ws_handler))
+        .route(&format!("{}/mcp/sse",           bp), get(mcp::mcp_sse_handler))
+        .route(&format!("{}/mcp/message",       bp), post(mcp::mcp_message_handler))
         .route(&format!("{}/static/{{*path}}",  bp), get(serve_asset))
         .with_state(state);
 

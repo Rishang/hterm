@@ -50,6 +50,9 @@ pub struct AppState {
     /// Pre-built `"Basic <base64(user:pass)>"` string for O(1) Basic Auth
     /// comparison on each WebSocket upgrade.  `None` when auth is disabled.
     pub expected_auth: Option<String>,
+
+    /// Active MCP SSE channels.
+    pub mcp_transmitters: tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<axum::response::sse::Event>>>,
 }
 
 /// Commands forwarded from the WebSocket reader task to the PTY owner task.
