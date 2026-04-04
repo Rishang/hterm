@@ -24,9 +24,6 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::signal;
 
-#[cfg(unix)]
-use nix::libc;
-
 #[derive(Embed)]
 #[folder = "ui/dist/"]
 struct Assets;
