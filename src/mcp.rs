@@ -99,13 +99,12 @@ impl Stream for SessionStream {
 
 impl Drop for SessionStream {
     fn drop(&mut self) {
-        let session_id = self.session_id.clone();
-        let state = Arc::clone(&self.state);
-        // We're in a sync drop context; spawn a task to do the async remove.
-        tokio::spawn(async move {
-            state.mcp_transmitters.write().await.remove(&session_id);
-            tracing::debug!(session_id = %session_id, "MCP session removed");
-        });
+        // std::sync::RwLock can be used directly in a sync Drop context —
+        // no need to spawn a task for cleanup.
+        if let Ok(mut map) = self.state.mcp_transmitters.write() {
+            map.remove(&self.session_id);
+        }
+        tracing::debug!(session_id = %self.session_id, "MCP session removed");
     }
 }
 
@@ -131,7 +130,7 @@ pub async fn mcp_sse_handler(
     state
         .mcp_transmitters
         .write()
-        .await
+        .unwrap_or_else(|e| e.into_inner())
         .insert(session_id.clone(), tx.clone());
 
     // Tell the client where to POST messages.
@@ -162,7 +161,8 @@ pub async fn mcp_message_handler(
     }
 
     let tx = {
-        let transmitters = state.mcp_transmitters.read().await;
+        let transmitters = state.mcp_transmitters.read()
+            .unwrap_or_else(|e| e.into_inner());
         match transmitters.get(&query.session_id) {
             Some(tx) => tx.clone(),
             None => return axum::http::StatusCode::NOT_FOUND.into_response(),

@@ -286,12 +286,14 @@ async fn main() {
     // ── Shutdown channel ──────────────────────────────────────────────────────
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    let cfg = Arc::new(cfg);
+
     let state = Arc::new(AppState {
-        config:        cfg.clone(),
+        config:        Arc::clone(&cfg),
         client_count:  std::sync::atomic::AtomicU32::new(0),
         shutdown_tx,
         expected_auth,
-        mcp_transmitters: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        mcp_transmitters: std::sync::RwLock::new(std::collections::HashMap::new()),
     });
 
     // ── Router ────────────────────────────────────────────────────────────────
@@ -495,29 +497,20 @@ async fn serve_config(json: &'static str) -> impl IntoResponse {
 }
 
 async fn serve_openapi() -> impl IntoResponse {
-    match Assets::get("openapi.yaml") {
-        Some(content) => {
-            let yaml_str = std::str::from_utf8(&content.data).unwrap_or("{}");
-            // Parse YAML and convert to JSON for better API compatibility
-            match serde_yaml::from_str::<serde_json::Value>(yaml_str) {
-                Ok(json_value) => {
-                    let json_str = serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "{}".to_string());
-                    (
-                        StatusCode::OK,
-                        [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        json_str
-                    ).into_response()
-                }
-                Err(_) => {
-                    // Fallback: serve as YAML if JSON conversion fails
-                    (
-                        StatusCode::OK,
-                        [(axum::http::header::CONTENT_TYPE, "application/x-yaml")],
-                        yaml_str.to_string()
-                    ).into_response()
-                }
-            }
-        }
+    static OPENAPI_JSON: std::sync::LazyLock<Option<&'static str>> = std::sync::LazyLock::new(|| {
+        let content = Assets::get("openapi.yaml")?;
+        let yaml_str = std::str::from_utf8(&content.data).ok()?;
+        let json_value: serde_json::Value = serde_yaml::from_str(yaml_str).ok()?;
+        let json_str = serde_json::to_string_pretty(&json_value).ok()?;
+        Some(Box::leak(json_str.into_boxed_str()))
+    });
+
+    match *OPENAPI_JSON {
+        Some(json_str) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            json_str,
+        ).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -589,14 +582,12 @@ async fn serve_exec(
                 buf
             };
 
-            let (stdout_bytes, stderr_bytes) = tokio::join!(stdout_fut, stderr_fut);
+            let (stdout_bytes, stderr_bytes, wait_result) = tokio::join!(stdout_fut, stderr_fut, child.wait());
 
-            // Note: We don't call child.wait() to get exit status because we
-            // already consumed stdout/stderr. The child is reaped by tokio automatically.
             let res = ExecResponse {
                 stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
                 stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
-                status: None, // Exit status not captured (stdout/stderr already consumed)
+                status: wait_result.ok().and_then(|s| s.code()),
             };
             (StatusCode::OK, Json(res)).into_response()
         }

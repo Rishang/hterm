@@ -39,7 +39,7 @@ const PTY_CMD_CAP: usize = 8;
 
 /// Shared application state held in an `Arc` by every connection handler.
 pub struct AppState {
-    pub config: AppConfig,
+    pub config: Arc<AppConfig>,
 
     /// Number of currently connected clients.
     pub client_count: std::sync::atomic::AtomicU32,
@@ -52,7 +52,11 @@ pub struct AppState {
     pub expected_auth: Option<String>,
 
     /// Active MCP SSE channels.
-    pub mcp_transmitters: tokio::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<axum::response::sse::Event>>>,
+    ///
+    /// Uses a `std::sync::RwLock` because the lock is never held across `.await`
+    /// points — only quick insert/remove/lookup operations.  This avoids the
+    /// overhead of tokio's async lock machinery.
+    pub mcp_transmitters: std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<axum::response::sse::Event>>>,
 }
 
 /// Commands forwarded from the WebSocket reader task to the PTY owner task.
@@ -354,16 +358,17 @@ async fn pty_main_loop(
 
 /// Flush the coalesce buffer as a single `Binary` WebSocket frame.
 ///
-/// Uses `mem::replace` to hand the `Vec`'s allocation to `Bytes::from`
-/// zero-copy, then resets the buffer for the next window.
+/// Copies the accumulated data into a `Bytes` value and reuses the existing
+/// `Vec` allocation for the next coalesce window, avoiding a fresh 16 KiB
+/// allocation on every flush.
 ///
 /// Returns `true` if the outbound channel is closed (caller should stop).
 async fn flush_coalesce(coalesce: &mut Vec<u8>, tx: &mpsc::Sender<Message>) -> bool {
     if coalesce.len() > 1 {
-        let mut next = Vec::with_capacity(MAX_COALESCE_SIZE + 1);
-        next.push(MSG_OUTPUT);
-        let payload = std::mem::replace(coalesce, next);
-        return tx.send(Message::Binary(Bytes::from(payload))).await.is_err();
+        let payload = Bytes::copy_from_slice(&coalesce[..]);
+        coalesce.clear();
+        coalesce.push(MSG_OUTPUT);
+        return tx.send(Message::Binary(payload)).await.is_err();
     }
     false
 }

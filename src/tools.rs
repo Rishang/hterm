@@ -237,18 +237,21 @@ fn tool_list_tree() -> Value {
 
 
 pub fn handle_tools_list() -> Value {
-    json!({
-        "tools": [
-            tool_bash(),
-            tool_read_file(),
-            tool_write_file(),
-            tool_edit_file(),
-            tool_read_file_metadata(),
-            tool_list_processes(),
-            tool_list_files(),
-            tool_list_tree()
-        ]
-    })
+    static TOOLS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+        json!({
+            "tools": [
+                tool_bash(),
+                tool_read_file(),
+                tool_write_file(),
+                tool_edit_file(),
+                tool_read_file_metadata(),
+                tool_list_processes(),
+                tool_list_files(),
+                tool_list_tree()
+            ]
+        })
+    });
+    TOOLS.clone()
 }
 
 /// Unified authentication check for both MCP and REST APIs
@@ -265,16 +268,24 @@ pub fn check_auth(state: &AppState, headers: &HeaderMap) -> bool {
 
 /// Validate tool arguments and provide detailed error messages
 fn validate_tool_arguments(tool_name: &str, arguments: &Value) -> Result<(), String> {
-    let tool_def = match tool_name {
-        "bash" => tool_bash(),
-        "read_file" => tool_read_file(),
-        "write_file" => tool_write_file(),
-        "edit_file" => tool_edit_file(),
-        "read_file_metadata" => tool_read_file_metadata(),
-        "list_processes" => tool_list_processes(),
-        "list_files" => tool_list_files(),
-        "list_tree" => tool_list_tree(),
-        _ => return Ok(()),
+    use std::collections::HashMap;
+
+    static TOOL_DEFS: std::sync::LazyLock<HashMap<&'static str, Value>> = std::sync::LazyLock::new(|| {
+        HashMap::from([
+            ("bash", tool_bash()),
+            ("read_file", tool_read_file()),
+            ("write_file", tool_write_file()),
+            ("edit_file", tool_edit_file()),
+            ("read_file_metadata", tool_read_file_metadata()),
+            ("list_processes", tool_list_processes()),
+            ("list_files", tool_list_files()),
+            ("list_tree", tool_list_tree()),
+        ])
+    });
+
+    let tool_def = match TOOL_DEFS.get(tool_name) {
+        Some(def) => def,
+        None => return Ok(()),
     };
 
     let schema = tool_def.get("inputSchema").unwrap();
@@ -455,10 +466,11 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
         .unwrap_or(300)
         .clamp(1, 3600);
 
-    // Wrap command with 'set -x' for verbose output
-    let verbose_command = format!("set -x\n{}", command);
-
     let mut cmd = tokio::process::Command::new("bash");
+    // Pre-size to avoid reallocation during format
+    let mut verbose_command = String::with_capacity(7 + command.len());
+    verbose_command.push_str("set -x\n");
+    verbose_command.push_str(&command);
     cmd.arg("-c").arg(&verbose_command);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -680,8 +692,11 @@ async fn read_file_metadata_tool(args: &Value) -> Result<Value, String> {
     }
 }
 
-/// Detect file type using magic bytes (via infer crate) and MIME type guessing
+/// Detect file type using magic bytes (via infer crate) and MIME type guessing.
+/// Only reads the first 8 KiB of the file to avoid loading large files into memory.
 async fn detect_file_type(path: &str) -> String {
+    use tokio::io::AsyncReadExt;
+
     let path_obj = Path::new(path);
 
     // Get MIME type from extension as fallback
@@ -690,79 +705,78 @@ async fn detect_file_type(path: &str) -> String {
         .map(|m| m.to_string())
         .unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Read first 8KB for comprehensive magic byte detection
     let mut details = Vec::new();
 
-    match tokio::fs::read(path).await {
-        Ok(content) if content.is_empty() => {
-            return "empty file".to_string();
-        }
-        Ok(content) => {
-            let sample_size = content.len().min(8192);
-            let sample = &content[..sample_size];
+    // Read only the first 8 KiB — enough for magic bytes, shebangs, and encoding detection
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) => return format!("unable to read file: {}", e),
+    };
+    let mut sample = vec![0u8; 8192];
+    let n = match file.read(&mut sample).await {
+        Ok(0) => return "empty file".to_string(),
+        Ok(n) => n,
+        Err(e) => return format!("unable to read file: {}", e),
+    };
+    sample.truncate(n);
 
-            // Check for ELF first to add detailed info
-            let is_elf = sample.len() >= 18 && sample.starts_with(&[0x7F, b'E', b'L', b'F']);
+    // Check for ELF first to add detailed info
+    let is_elf = sample.len() >= 18 && sample.starts_with(&[0x7F, b'E', b'L', b'F']);
 
-            // Use infer crate for magic byte detection
-            if let Some(kind) = infer::get(sample) {
-                details.push(format!("type: {}", kind.mime_type()));
+    // Use infer crate for magic byte detection
+    if let Some(kind) = infer::get(&sample) {
+        details.push(format!("type: {}", kind.mime_type()));
 
-                // Add ELF-specific details if it's an ELF file
-                if is_elf || kind.extension() == "elf" {
-                    if let Some(elf_info) = parse_elf_details(sample) {
-                        details.push(elf_info);
-                    }
-                } else {
-                    details.push(format!("extension: .{}", kind.extension()));
-                }
-
-                // Add human-readable description based on type
-                let category = match kind.matcher_type() {
-                    infer::MatcherType::App => "application",
-                    infer::MatcherType::Archive => "archive",
-                    infer::MatcherType::Audio => "audio",
-                    infer::MatcherType::Book => "ebook",
-                    infer::MatcherType::Doc => "document",
-                    infer::MatcherType::Font => "font",
-                    infer::MatcherType::Image => "image",
-                    infer::MatcherType::Video => "video",
-                    infer::MatcherType::Custom => "custom",
-                    _ => "unknown",
-                };
-                details.push(format!("category: {}", category));
-            } else if is_elf {
-                // ELF not detected by infer, parse manually
-                details.push("type: application/x-executable".to_string());
-                if let Some(elf_info) = parse_elf_details(sample) {
-                    details.push(elf_info);
-                }
-            } else if is_text_content(sample) {
-                // Text file
-                details.push("type: text/plain".to_string());
-
-                // Detect encoding
-                if is_utf8(&content) {
-                    details.push("encoding: UTF-8".to_string());
-                } else if is_ascii(sample) {
-                    details.push("encoding: ASCII".to_string());
-                } else {
-                    details.push("encoding: unknown".to_string());
-                }
-
-                // Check for script shebangs
-                if let Some(shebang) = detect_shebang(sample) {
-                    details.push(format!("script: {}", shebang));
-                }
-            } else {
-                // Unknown binary
-                details.push(format!("type: {} (from extension)", mime_from_ext));
-                details.push("category: binary (unknown format)".to_string());
+        // Add ELF-specific details if it's an ELF file
+        if is_elf || kind.extension() == "elf" {
+            if let Some(elf_info) = parse_elf_details(&sample) {
+                details.push(elf_info);
             }
+        } else {
+            details.push(format!("extension: .{}", kind.extension()));
         }
-        Err(e) => {
-            return format!("unable to read file: {}", e);
+
+        // Add human-readable description based on type
+        let category = match kind.matcher_type() {
+            infer::MatcherType::App => "application",
+            infer::MatcherType::Archive => "archive",
+            infer::MatcherType::Audio => "audio",
+            infer::MatcherType::Book => "ebook",
+            infer::MatcherType::Doc => "document",
+            infer::MatcherType::Font => "font",
+            infer::MatcherType::Image => "image",
+            infer::MatcherType::Video => "video",
+            infer::MatcherType::Custom => "custom",
+            _ => "unknown",
+        };
+        details.push(format!("category: {}", category));
+    } else if is_elf {
+        // ELF not detected by infer, parse manually
+        details.push("type: application/x-executable".to_string());
+        if let Some(elf_info) = parse_elf_details(&sample) {
+            details.push(elf_info);
         }
+    } else if is_text_content(&sample) {
+        // Text file
+        details.push("type: text/plain".to_string());
+
+        // Detect encoding from the sample (avoids reading entire file)
+        if is_utf8(&sample) {
+            details.push("encoding: UTF-8".to_string());
+        } else if is_ascii(&sample) {
+            details.push("encoding: ASCII".to_string());
+        } else {
+            details.push("encoding: unknown".to_string());
+        }
+
+        // Check for script shebangs
+        if let Some(shebang) = detect_shebang(&sample) {
+            details.push(format!("script: {}", shebang));
+        }
+    } else {
+        // Unknown binary
+        details.push(format!("type: {} (from extension)", mime_from_ext));
+        details.push("category: binary (unknown format)".to_string());
     }
 
     details.join(", ")

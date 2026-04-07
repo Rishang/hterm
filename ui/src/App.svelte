@@ -30,6 +30,7 @@
   let clipboardWriteGranted = false;
 
   const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
 
   // ---- Load config from server ----
   async function loadConfig() {
@@ -90,7 +91,7 @@
       msg.set(payload, 1);
       ws.send(msg);
     } else if (typeof payload === "string") {
-      const encoded = new TextEncoder().encode(payload);
+      const encoded = encoder.encode(payload);
       const msg = new Uint8Array(1 + encoded.length);
       msg[0] = type;
       msg.set(encoded, 1);
