@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::signal;
 
@@ -561,35 +560,44 @@ async fn serve_exec(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
 
+    /// Maximum bytes to capture from exec stdout/stderr (prevents OOM).
+    const MAX_EXEC_OUTPUT: usize = 10 * 1024 * 1024; // 10 MiB
+    /// Hard timeout so a hung command can't hold the HTTP connection forever.
+    const EXEC_TIMEOUT: Duration = Duration::from_secs(300);
+
     match command.spawn() {
         Ok(mut child) => {
             let stdout_opt = child.stdout.take();
             let stderr_opt = child.stderr.take();
 
-            let stdout_fut = async {
-                let mut buf = Vec::new();
-                if let Some(mut out) = stdout_opt {
-                    let _ = out.read_to_end(&mut buf).await;
+            let result = tokio::time::timeout(EXEC_TIMEOUT, async {
+                let stdout_fut = tools::read_capped(stdout_opt, MAX_EXEC_OUTPUT);
+                let stderr_fut = tools::read_capped(stderr_opt, MAX_EXEC_OUTPUT);
+                let (stdout_bytes, stderr_bytes, wait_result) =
+                    tokio::join!(stdout_fut, stderr_fut, child.wait());
+                (stdout_bytes, stderr_bytes, wait_result)
+            })
+            .await;
+
+            match result {
+                Ok((stdout_bytes, stderr_bytes, wait_result)) => {
+                    let res = ExecResponse {
+                        stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
+                        stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
+                        status: wait_result.ok().and_then(|s| s.code()),
+                    };
+                    (StatusCode::OK, Json(res)).into_response()
                 }
-                buf
-            };
-
-            let stderr_fut = async {
-                let mut buf = Vec::new();
-                if let Some(mut err) = stderr_opt {
-                    let _ = err.read_to_end(&mut buf).await;
+                Err(_) => {
+                    let _ = child.kill().await;
+                    let res = ExecResponse {
+                        stdout: String::new(),
+                        stderr: "Command timed out after 300s".to_string(),
+                        status: None,
+                    };
+                    (StatusCode::OK, Json(res)).into_response()
                 }
-                buf
-            };
-
-            let (stdout_bytes, stderr_bytes, wait_result) = tokio::join!(stdout_fut, stderr_fut, child.wait());
-
-            let res = ExecResponse {
-                stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
-                stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
-                status: wait_result.ok().and_then(|s| s.code()),
-            };
-            (StatusCode::OK, Json(res)).into_response()
+            }
         }
         Err(e) => {
             let res = ExecResponse {

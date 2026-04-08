@@ -56,7 +56,7 @@ pub struct AppState {
     /// Uses a `std::sync::RwLock` because the lock is never held across `.await`
     /// points — only quick insert/remove/lookup operations.  This avoids the
     /// overhead of tokio's async lock machinery.
-    pub mcp_transmitters: std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<axum::response::sse::Event>>>,
+    pub mcp_transmitters: std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<axum::response::sse::Event>>>,
 }
 
 /// Commands forwarded from the WebSocket reader task to the PTY owner task.

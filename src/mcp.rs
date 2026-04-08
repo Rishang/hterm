@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use crate::config::AppConfig;
@@ -82,7 +82,7 @@ const INVALID_PARAMS: i32 = -32602;
 /// Without this guard, every connection leaks an entry in the transmitters map
 /// for the lifetime of the process.
 struct SessionStream {
-    inner: UnboundedReceiverStream<Event>,
+    inner: ReceiverStream<Event>,
     session_id: String,
     state: Arc<AppState>,
 }
@@ -125,7 +125,8 @@ pub async fn mcp_sse_handler(
     }
 
     let session_id = Uuid::new_v4().to_string();
-    let (tx, rx) = mpsc::unbounded_channel();
+    // Bounded channel: caps memory when the SSE client is slow or stalled.
+    let (tx, rx) = mpsc::channel(64);
 
     state
         .mcp_transmitters
@@ -136,13 +137,13 @@ pub async fn mcp_sse_handler(
     // Tell the client where to POST messages.
     let bp = &state.config.base_path;
     let endpoint = format!("{}/mcp/message?sessionId={}", bp, session_id);
-    let _ = tx.send(Event::default().event("endpoint").data(&endpoint));
+    let _ = tx.try_send(Event::default().event("endpoint").data(&endpoint));
 
     tracing::info!(session_id = %session_id, "MCP session opened");
 
     // SessionStream cleans up the transmitters entry when the SSE stream is dropped.
     let stream = SessionStream {
-        inner: UnboundedReceiverStream::new(rx),
+        inner: ReceiverStream::new(rx),
         session_id,
         state: Arc::clone(&state),
     };
@@ -226,7 +227,7 @@ pub async fn mcp_message_handler(
         };
 
         if !response_str.is_empty() {
-            let _ = tx.send(Event::default().event("message").data(response_str));
+            let _ = tx.send(Event::default().event("message").data(response_str)).await;
         }
     });
 

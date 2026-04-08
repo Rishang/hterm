@@ -10,6 +10,7 @@ compile_error!(
 use nix::libc;
 use nix::pty::{openpty, OpenptyResult, Winsize};
 use nix::sys::signal::{self, Signal};
+use nix::sys::wait::{waitpid, WaitPidFlag};
 use nix::unistd::{self, ForkResult, Pid};
 use std::ffi::CString;
 use std::io;
@@ -192,20 +193,30 @@ impl PtySession {
         }
     }
 
-    /// Write `data` to the PTY master, delivering it to the shell as if typed.
+    /// Write all of `data` to the PTY master, delivering it to the shell as
+    /// if typed.  Retries on partial writes so no keystrokes are silently lost
+    /// when the kernel's PTY buffer is full.
     pub async fn write(&self, data: &[u8]) -> io::Result<usize> {
-        loop {
+        let mut written = 0;
+        while written < data.len() {
             let mut guard = self.master.ready(Interest::WRITABLE).await?;
             match guard.try_io(|fd| {
+                let remaining = &data[written..];
                 let n = unsafe {
-                    libc::write(fd.as_raw_fd(), data.as_ptr() as *const libc::c_void, data.len())
+                    libc::write(
+                        fd.as_raw_fd(),
+                        remaining.as_ptr() as *const libc::c_void,
+                        remaining.len(),
+                    )
                 };
                 if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
             }) {
-                Ok(result) => return result,
+                Ok(Ok(n)) => written += n,
+                Ok(Err(e)) => return Err(e),
                 Err(_would_block) => continue,
             }
         }
+        Ok(written)
     }
 
     /// Resize the PTY window (columns × rows).
@@ -222,7 +233,21 @@ impl PtySession {
 impl Drop for PtySession {
     fn drop(&mut self) {
         // Send SIGHUP to ask the shell to terminate gracefully.
-        // Tokio's runtime will handle reaping the child process.
         let _ = signal::kill(self.child_pid, Signal::SIGHUP);
+
+        // Reap the child to prevent zombie accumulation.  PtySession uses raw
+        // fork(), so tokio has no knowledge of this PID and won't reap it.
+        // Try a non-blocking waitpid first (child may already be dead).
+        match waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)) {
+            Ok(nix::sys::wait::WaitStatus::StillAlive) | Err(_) => {
+                // Child hasn't exited yet — spawn a detached thread to block
+                // on waitpid so the zombie is reaped once the shell exits.
+                let pid = self.child_pid;
+                std::thread::spawn(move || {
+                    let _ = waitpid(pid, None);
+                });
+            }
+            Ok(_) => {} // already reaped
+        }
     }
 }

@@ -121,17 +121,24 @@
     rafScheduled = true;
     requestAnimationFrame(() => {
       rafScheduled = false;
-      if (pendingOutput.length === 0) return;
+      const chunks = pendingOutput;
+      if (chunks.length === 0) return;
+      pendingOutput = [];
+
+      // Fast path: single chunk — write directly, no merge allocation.
+      if (chunks.length === 1) {
+        term.write(chunks[0]);
+        return;
+      }
 
       let totalLen = 0;
-      for (const chunk of pendingOutput) totalLen += chunk.length;
+      for (const chunk of chunks) totalLen += chunk.length;
       const merged = new Uint8Array(totalLen);
       let offset = 0;
-      for (const chunk of pendingOutput) {
+      for (const chunk of chunks) {
         merged.set(chunk, offset);
         offset += chunk.length;
       }
-      pendingOutput = [];
       term.write(merged);
     });
   }

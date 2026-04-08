@@ -5,6 +5,13 @@ use std::path::Path;
 use crate::config::AppConfig;
 use crate::ws::AppState;
 
+/// Maximum bytes to read from a command's stdout or stderr before truncating.
+/// Prevents OOM from commands that produce unbounded output.
+const MAX_CMD_OUTPUT: usize = 10 * 1024 * 1024; // 10 MiB
+
+/// Maximum file size that `read_file` will load into memory.
+const MAX_READ_FILE: u64 = 50 * 1024 * 1024; // 50 MiB
+
 // ── Tool definitions (camelCase, Claude Code inspired) ───────────────────────
 
 fn tool_bash() -> Value {
@@ -443,10 +450,36 @@ async fn run_simple_command_with_timeout(
         Err(e) => return Ok(tool_error(format!("Failed to spawn {}: {}", cmd_name, e))),
     };
 
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => handle_cmd_output(Ok(output)),
-        Ok(Err(e)) => Ok(tool_error(format!("{} command failed: {}", cmd_name, e))),
-        Err(_) => Ok(tool_error(format!("{} command timed out after {}s", cmd_name, timeout_secs))),
+    let mut child = child;
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+
+    match tokio::time::timeout(timeout, async {
+        let (out, err, wait) = tokio::join!(
+            read_capped(stdout_pipe, MAX_CMD_OUTPUT),
+            read_capped(stderr_pipe, MAX_CMD_OUTPUT),
+            child.wait()
+        );
+        (out, err, wait)
+    }).await {
+        Ok((out, err, wait)) => {
+            let mut text = String::from_utf8_lossy(&out).into_owned();
+            let stderr = String::from_utf8_lossy(&err);
+            if !stderr.is_empty() {
+                if !text.is_empty() { text.push_str("\n--- stderr ---\n"); }
+                text.push_str(&stderr);
+            }
+            if text.is_empty() { text = "(no output)".into(); }
+            if wait.map(|s| s.success()).unwrap_or(false) {
+                Ok(tool_success(text))
+            } else {
+                Ok(tool_error(text))
+            }
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            Ok(tool_error(format!("{} command timed out after {}s", cmd_name, timeout_secs)))
+        }
     }
 }
 
@@ -488,16 +521,29 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
         cmd.gid(gid);
     }
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return Ok(tool_error(format!("Failed to spawn bash: {}", e))),
     };
 
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+
     let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Ok(tool_error(format!("Bash I/O error: {}", e))),
+    let result = tokio::time::timeout(timeout, async {
+        let stdout_fut = read_capped(stdout_pipe, MAX_CMD_OUTPUT);
+        let stderr_fut = read_capped(stderr_pipe, MAX_CMD_OUTPUT);
+        let (stdout_bytes, stderr_bytes, wait_res) =
+            tokio::join!(stdout_fut, stderr_fut, child.wait());
+        (stdout_bytes, stderr_bytes, wait_res)
+    })
+    .await;
+
+    let (stdout_bytes, stderr_bytes, wait_res) = match result {
+        Ok(t) => t,
         Err(_) => {
+            // Kill the child on timeout so it doesn't linger.
+            let _ = child.kill().await;
             return Ok(tool_error(format!(
                 "Bash command timed out after {}s",
                 timeout_secs
@@ -505,13 +551,17 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
         }
     };
 
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let stderr_str = String::from_utf8_lossy(&output.stderr);
-    let exit_code = output.status.code().unwrap_or(-1);
+    let stdout_str = String::from_utf8_lossy(&stdout_bytes);
+    let stderr_str = String::from_utf8_lossy(&stderr_bytes);
+    let status = wait_res.ok();
+    let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
 
     let mut text = String::new();
     if !stdout_str.is_empty() {
         text.push_str(&stdout_str);
+    }
+    if stdout_bytes.len() >= MAX_CMD_OUTPUT {
+        text.push_str("\n... (stdout truncated at 10 MiB)");
     }
     if !stderr_str.is_empty() {
         if !text.is_empty() {
@@ -519,11 +569,14 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
         }
         text.push_str(&stderr_str);
     }
+    if stderr_bytes.len() >= MAX_CMD_OUTPUT {
+        text.push_str("\n... (stderr truncated at 10 MiB)");
+    }
     if text.is_empty() {
         text = "(no output)".into();
     }
 
-    let is_error = !output.status.success();
+    let is_error = !status.map(|s| s.success()).unwrap_or(false);
     tracing::info!(exit_code, "bash tool finished");
 
     Ok(json!({
@@ -534,6 +587,22 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
 
 async fn read_file_tool(args: &Value) -> Result<Value, String> {
     let path = extract_string(args, "path")?;
+
+    // Check file size before reading to prevent OOM on huge files.
+    match tokio::fs::metadata(&path).await {
+        Ok(m) if m.len() > MAX_READ_FILE => {
+            return Ok(tool_error(format!(
+                "File '{}' is too large ({} bytes, max {} MiB). Use bash tool with head/tail instead.",
+                path,
+                m.len(),
+                MAX_READ_FILE / (1024 * 1024)
+            )));
+        }
+        Err(e) => {
+            return Ok(tool_error(format!("Failed to read '{}': {}", path, e)));
+        }
+        _ => {}
+    }
 
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => Ok(tool_success(content)),
@@ -585,6 +654,16 @@ async fn edit_file_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> 
         .get("replaceAll")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+
+    // Guard against huge files
+    if let Ok(m) = tokio::fs::metadata(&path).await {
+        if m.len() > MAX_READ_FILE {
+            return Ok(tool_error(format!(
+                "File '{}' is too large ({} bytes, max {} MiB)",
+                path, m.len(), MAX_READ_FILE / (1024 * 1024)
+            )));
+        }
+    }
 
     // Read the file
     let content = match tokio::fs::read_to_string(&path).await {
@@ -967,32 +1046,6 @@ fn extract_string(args: &Value, key: &str) -> Result<String, String> {
         .map(String::from)
 }
 
-fn handle_cmd_output(
-    output: std::io::Result<std::process::Output>,
-) -> Result<Value, String> {
-    match output {
-        Ok(out) => {
-            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            if !stderr.is_empty() {
-                if !text.is_empty() {
-                    text.push_str("\n--- stderr ---\n");
-                }
-                text.push_str(&stderr);
-            }
-            if text.is_empty() {
-                text = "(no output)".into();
-            }
-            if out.status.success() {
-                Ok(tool_success(text))
-            } else {
-                Ok(tool_error(text))
-            }
-        }
-        Err(e) => Ok(tool_error(format!("Command execution failed: {}", e))),
-    }
-}
-
 fn tool_success(msg: String) -> Value {
     json!({
         "content": [{ "type": "text", "text": msg }],
@@ -1009,4 +1062,42 @@ fn tool_error(msg: String) -> Value {
 
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Read from an async reader up to `max` bytes, then discard the rest.
+/// Returns the capped buffer.  Used to prevent OOM from unbounded command output.
+pub(crate) async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: Option<R>,
+    max: usize,
+) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+
+    let mut reader = match reader {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+    let mut buf = Vec::with_capacity(max.min(64 * 1024)); // start small
+    let mut total = 0usize;
+    let mut tmp = [0u8; 8192];
+    loop {
+        match reader.read(&mut tmp).await {
+            Ok(0) => break,
+            Ok(n) => {
+                let remaining = max.saturating_sub(total);
+                let take = n.min(remaining);
+                if take > 0 {
+                    buf.extend_from_slice(&tmp[..take]);
+                }
+                total += n;
+                if total >= max {
+                    // Keep draining to avoid SIGPIPE killing the child, but
+                    // don't store anything beyond the cap.
+                    tokio::io::copy(&mut reader, &mut tokio::io::sink()).await.ok();
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    buf
 }

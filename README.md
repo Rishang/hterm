@@ -552,8 +552,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <div align="center">
 
-**Made with ❤️ by the hterm community**
-
 [⭐ Star this repo](https://github.com/Rishang/hterm) • [🐛 Report Bug](https://github.com/Rishang/hterm/issues) • [💡 Request Feature](https://github.com/Rishang/hterm/issues)
 
 </div>
