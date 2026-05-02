@@ -2,7 +2,6 @@
   import { onMount, onDestroy } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
-  import { WebglAddon } from "@xterm/addon-webgl";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
 
@@ -11,31 +10,68 @@
   const MSG_RESIZE = 2;
   const MSG_ERROR = 3;
 
+  /**
+   * @typedef {Partial<import('@xterm/xterm').ITheme> & {
+   *   fontFamily?: string,
+   *   fontSize?: number
+   * }} ThemeConfig
+   *
+   * @typedef {{
+   *   theme?: ThemeConfig
+   * }} ClientConfig
+   */
+
   const RECONNECT_DELAY_MS = 1000;
   const MAX_RECONNECT_DELAY_MS = 15000;
   const RESIZE_DEBOUNCE_MS = 50;
+  const DEFAULT_SCROLLBACK_ROWS = 3000;
+  const MAX_MERGED_OUTPUT_BYTES = 256 * 1024;
+  const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
 
+  /** @type {HTMLElement | undefined} */
   let terminalContainer;
+  /** @type {Terminal | undefined} */
   let term;
+  /** @type {FitAddon | undefined} */
   let fitAddon;
+  /** @type {WebSocket | undefined} */
   let ws;
   let reconnectDelay = RECONNECT_DELAY_MS;
+  /** @type {number | null} */
   let reconnectTimer = null;
+  /** @type {number | null} */
   let resizeTimer = null;
+  /** @type {number | null} */
+  let initialFitTimer = null;
+  /** @type {Uint8Array[]} */
   let pendingOutput = [];
+  let pendingOutputBytes = 0;
   let rafScheduled = false;
+  /** @type {number | null} */
+  let rafId = null;
+  /** @type {ResizeObserver | null} */
   let resizeObserver = null;
+  /** @type {(() => void) | null} */
   let viewportResizeHandler = null;
   let clipboardReadGranted = false;
   let clipboardWriteGranted = false;
 
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  const basePath = import.meta.env.DEV
+    ? ""
+    : window.location.pathname.replace(/\/$/, "");
+
+  /** @param {string} path */
+  function serverPath(path) {
+    return `${basePath}${path}`;
+  }
 
   // ---- Load config from server ----
+  /** @returns {Promise<ClientConfig>} */
   async function loadConfig() {
     try {
-      const res = await fetch("/api/config");
+      const res = await fetch(serverPath("/api/config"));
       if (!res.ok) return {};
       return await res.json();
     } catch {
@@ -44,11 +80,14 @@
   }
 
   // ---- Build xterm.js theme from config ----
+  /** @param {ThemeConfig} themeConfig */
   function buildTheme(themeConfig) {
     if (!themeConfig || Object.keys(themeConfig).length === 0) {
       return undefined;
     }
+    /** @type {import('@xterm/xterm').ITheme} */
     const theme = {};
+    /** @type {(keyof import('@xterm/xterm').ITheme)[]} */
     const themeKeys = [
       "background",
       "foreground",
@@ -74,14 +113,19 @@
       "brightWhite",
     ];
     for (const key of themeKeys) {
-      if (themeConfig[key]) {
-        theme[key] = themeConfig[key];
+      const value = themeConfig[key];
+      if (typeof value === "string") {
+        theme[key] = value;
       }
     }
     return theme;
   }
 
   // ---- Binary message helpers ----
+  /**
+   * @param {number} type
+   * @param {string | Uint8Array | undefined} [payload]
+   */
   function sendBinary(type, payload) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
@@ -101,10 +145,15 @@
     }
   }
 
+  /** @param {string | Uint8Array} data */
   function sendInput(data) {
     sendBinary(MSG_INPUT, data);
   }
 
+  /**
+   * @param {number} cols
+   * @param {number} rows
+   */
   function sendResize(cols, rows) {
     const buf = new ArrayBuffer(5);
     const view = new DataView(buf);
@@ -119,28 +168,51 @@
   function scheduleFlush() {
     if (rafScheduled) return;
     rafScheduled = true;
-    requestAnimationFrame(() => {
-      rafScheduled = false;
-      const chunks = pendingOutput;
-      if (chunks.length === 0) return;
-      pendingOutput = [];
+    rafId = requestAnimationFrame(flushPendingOutput);
+  }
 
-      // Fast path: single chunk — write directly, no merge allocation.
-      if (chunks.length === 1) {
-        term.write(chunks[0]);
-        return;
-      }
+  function flushPendingOutput() {
+    rafScheduled = false;
+    rafId = null;
 
-      let totalLen = 0;
-      for (const chunk of chunks) totalLen += chunk.length;
-      const merged = new Uint8Array(totalLen);
-      let offset = 0;
-      for (const chunk of chunks) {
-        merged.set(chunk, offset);
-        offset += chunk.length;
-      }
-      term.write(merged);
-    });
+    const chunks = pendingOutput;
+    const totalLen = pendingOutputBytes;
+    if (chunks.length === 0 || !term) return;
+
+    pendingOutput = [];
+    pendingOutputBytes = 0;
+
+    // Fast path: single chunk — write directly, no merge allocation.
+    if (chunks.length === 1) {
+      term.write(chunks[0]);
+      return;
+    }
+
+    // Avoid large merge allocations under heavy output; xterm can queue writes.
+    if (totalLen > MAX_MERGED_OUTPUT_BYTES) {
+      for (const chunk of chunks) term.write(chunk);
+      return;
+    }
+
+    const merged = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    term.write(merged);
+  }
+
+  async function loadWebglRenderer() {
+    try {
+      const { WebglAddon } = await import("@xterm/addon-webgl");
+      if (!term) return;
+      const webglAddon = new WebglAddon();
+      webglAddon.onContextLoss(() => webglAddon.dispose());
+      term.loadAddon(webglAddon);
+    } catch {
+      console.log("WebGL not available, using canvas renderer");
+    }
   }
 
   function init() {
@@ -151,13 +223,10 @@
       cursorBlink: true,
       cursorInactiveStyle: "outline",
       cursorStyle: "block",
-      scrollback: 10000,
+      scrollback: DEFAULT_SCROLLBACK_ROWS,
       tabStopWidth: 4,
       allowProposedApi: true,
-      wordWrap: true,
-      // Enable bracketed paste so TUIs (vim, shells, etc.) can treat large
-      // pastes as a single operation instead of a long keystroke stream.
-      bracketedPasteMode: true,
+      ignoreBracketedPasteMode: false,
       theme: {
         background: "#1e1e2e",
       },
@@ -170,18 +239,11 @@
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
 
-    try {
-      const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => webglAddon.dispose());
-      term.loadAddon(webglAddon);
-    } catch {
-      console.log("WebGL not available, using canvas renderer");
-    }
-
     term.open(terminalContainer);
+    loadWebglRenderer();
 
     function doFit() {
-      try { fitAddon.fit(); } catch { /* ignore */ }
+      try { fitAddon?.fit(); } catch { /* ignore */ }
     }
 
     function scheduleFit() {
@@ -271,9 +333,10 @@
       doFit();
       connect();
       // Second pass after WebGL/font init may have shifted cell size
-      setTimeout(() => {
+      initialFitTimer = setTimeout(() => {
         doFit();
-        term.focus();
+        term?.focus();
+        initialFitTimer = null;
       }, 150);
     });
 
@@ -281,12 +344,13 @@
     loadConfig().then((config) => {
       const themeConfig = config.theme || {};
       const theme = buildTheme(themeConfig);
+      if (!term) return;
       if (theme) term.options.theme = theme;
       if (themeConfig.fontFamily)
         term.options.fontFamily = themeConfig.fontFamily;
       if (themeConfig.fontSize) term.options.fontSize = themeConfig.fontSize;
       // Re-fit after font changes since cell dimensions may have changed
-      try { fitAddon.fit(); } catch { /* ignore */ }
+      try { fitAddon?.fit(); } catch { /* ignore */ }
     });
   }
 
@@ -306,7 +370,7 @@
       host = "127.0.0.1:7681";
     }
 
-    ws = new WebSocket(`${protocol}//${host}/ws`);
+    ws = new WebSocket(`${protocol}//${host}${serverPath("/ws")}`);
     ws.binaryType = "arraybuffer";
 
     ws.onopen = () => {
@@ -334,7 +398,13 @@
       switch (data[0]) {
         case MSG_OUTPUT:
           pendingOutput.push(data.subarray(1));
-          scheduleFlush();
+          pendingOutputBytes += data.length - 1;
+          if (pendingOutputBytes >= MAX_PENDING_OUTPUT_BYTES) {
+            if (rafId !== null) cancelAnimationFrame(rafId);
+            flushPendingOutput();
+          } else {
+            scheduleFlush();
+          }
           break;
         case MSG_ERROR: {
           const msg = decoder.decode(data.subarray(1));
@@ -397,7 +467,11 @@
       ws = null;
     }
     if (resizeTimer) clearTimeout(resizeTimer);
+    if (initialFitTimer) clearTimeout(initialFitTimer);
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    pendingOutput = [];
+    pendingOutputBytes = 0;
     if (resizeObserver) resizeObserver.disconnect();
     if (viewportResizeHandler && window.visualViewport) {
       window.visualViewport.removeEventListener("resize", viewportResizeHandler);

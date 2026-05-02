@@ -192,37 +192,40 @@ pub async fn mcp_message_handler(
     tokio::spawn(async move {
         let id_value = request.id.unwrap_or(Value::Null);
 
-        let result = match request.method.as_str() {
-            "initialize" => Ok(handle_initialize(&request.params)),
-            "tools/list" => Ok(crate::tools::handle_tools_list()),
-            "tools/call" => handle_tools_call(&request.params, &state_clone.config).await,
-            // These capability-discovery methods must return empty lists, not
-            // METHOD_NOT_FOUND, or several MCP clients will refuse to connect.
-            "resources/list" => Ok(json!({ "resources": [] })),
-            "prompts/list" => Ok(json!({ "prompts": [] })),
-            "ping" => Ok(json!({})),
-            other => Err(RpcError {
-                code: METHOD_NOT_FOUND,
-                message: format!("Method not found: {}", other),
-            }),
-        };
+        let response_str = if request.method == "tools/list" {
+            serialize_success_raw(&id_value, crate::tools::handle_tools_list_json())
+        } else {
+            let result = match request.method.as_str() {
+                "initialize" => Ok(handle_initialize(&request.params)),
+                "tools/call" => handle_tools_call(&request.params, &state_clone.config).await,
+                // These capability-discovery methods must return empty lists, not
+                // METHOD_NOT_FOUND, or several MCP clients will refuse to connect.
+                "resources/list" => Ok(json!({ "resources": [] })),
+                "prompts/list" => Ok(json!({ "prompts": [] })),
+                "ping" => Ok(json!({})),
+                other => Err(RpcError {
+                    code: METHOD_NOT_FOUND,
+                    message: format!("Method not found: {}", other),
+                }),
+            };
 
-        let response_str = match result {
-            Ok(res) => {
-                let resp = JsonRpcResponse {
-                    jsonrpc: "2.0",
-                    id: &id_value,
-                    result: res,
-                };
-                serde_json::to_string(&resp).unwrap_or_default()
-            }
-            Err(e) => {
-                let resp = JsonRpcError {
-                    jsonrpc: "2.0",
-                    id: &id_value,
-                    error: e,
-                };
-                serde_json::to_string(&resp).unwrap_or_default()
+            match result {
+                Ok(res) => {
+                    let resp = JsonRpcResponse {
+                        jsonrpc: "2.0",
+                        id: &id_value,
+                        result: res,
+                    };
+                    serde_json::to_string(&resp).unwrap_or_default()
+                }
+                Err(e) => {
+                    let resp = JsonRpcError {
+                        jsonrpc: "2.0",
+                        id: &id_value,
+                        error: e,
+                    };
+                    serde_json::to_string(&resp).unwrap_or_default()
+                }
             }
         };
 
@@ -261,6 +264,17 @@ fn handle_initialize(params: &Value) -> Value {
     })
 }
 
+fn serialize_success_raw(id: &Value, result_json: &str) -> String {
+    let id_json = serde_json::to_string(id).unwrap_or_else(|_| "null".to_string());
+    let mut out = String::with_capacity(32 + id_json.len() + result_json.len());
+    out.push_str("{\"jsonrpc\":\"2.0\",\"id\":");
+    out.push_str(&id_json);
+    out.push_str(",\"result\":");
+    out.push_str(result_json);
+    out.push('}');
+    out
+}
+
 
 
 // ── tools/call dispatcher ─────────────────────────────────────────────────────
@@ -283,5 +297,4 @@ async fn handle_tools_call(params: &Value, cfg: &AppConfig) -> Result<Value, Rpc
         message: e,
     })
 }
-
 

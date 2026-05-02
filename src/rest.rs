@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -20,7 +20,11 @@ pub struct ToolCallRequest {
 }
 
 pub async fn list_tools_handler() -> impl IntoResponse {
-    Json(tools::handle_tools_list())
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        tools::handle_tools_list_json(),
+    )
 }
 
 pub async fn call_tool_handler(

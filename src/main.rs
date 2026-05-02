@@ -282,6 +282,35 @@ async fn main() {
         .into_boxed_str(),
     );
 
+    // ── Cache custom index.html once, with a small size guard ────────────────
+    let custom_index: Option<&'static [u8]> = if cfg.index_path.is_empty() {
+        None
+    } else {
+        let meta = match std::fs::metadata(&cfg.index_path) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!("Cannot read custom index metadata {}: {}", cfg.index_path, e);
+                std::process::exit(1);
+            }
+        };
+        if meta.len() > tools::MAX_CUSTOM_INDEX_SIZE {
+            tracing::error!(
+                "Custom index {} is too large ({} bytes, max {} MiB)",
+                cfg.index_path,
+                meta.len(),
+                tools::MAX_CUSTOM_INDEX_SIZE / (1024 * 1024)
+            );
+            std::process::exit(1);
+        }
+        match std::fs::read(&cfg.index_path) {
+            Ok(content) => Some(Box::leak(content.into_boxed_slice()) as &'static [u8]),
+            Err(e) => {
+                tracing::error!("Cannot read custom index {}: {}", cfg.index_path, e);
+                std::process::exit(1);
+            }
+        }
+    };
+
     // ── Shutdown channel ──────────────────────────────────────────────────────
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -292,6 +321,7 @@ async fn main() {
         client_count:  std::sync::atomic::AtomicU32::new(0),
         shutdown_tx,
         expected_auth,
+        custom_index,
         mcp_transmitters: std::sync::RwLock::new(std::collections::HashMap::new()),
     });
 
@@ -468,15 +498,14 @@ async fn serve_tcp(
 async fn serve_index(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let path = &state.config.index_path;
-    if path.is_empty() {
+    if let Some(content) = state.custom_index {
+        axum::response::Html(content).into_response()
+    } else {
         if let Some(content) = Assets::get("index.html") {
             return axum::response::Html(content.data).into_response();
         }
-    } else if let Ok(content) = tokio::fs::read(path).await {
-        return axum::response::Html(content).into_response();
+        StatusCode::NOT_FOUND.into_response()
     }
-    StatusCode::NOT_FOUND.into_response()
 }
 
 async fn serve_asset(
@@ -560,8 +589,6 @@ async fn serve_exec(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
 
-    /// Maximum bytes to capture from exec stdout/stderr (prevents OOM).
-    const MAX_EXEC_OUTPUT: usize = 10 * 1024 * 1024; // 10 MiB
     /// Hard timeout so a hung command can't hold the HTTP connection forever.
     const EXEC_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -571,19 +598,27 @@ async fn serve_exec(
             let stderr_opt = child.stderr.take();
 
             let result = tokio::time::timeout(EXEC_TIMEOUT, async {
-                let stdout_fut = tools::read_capped(stdout_opt, MAX_EXEC_OUTPUT);
-                let stderr_fut = tools::read_capped(stderr_opt, MAX_EXEC_OUTPUT);
-                let (stdout_bytes, stderr_bytes, wait_result) =
-                    tokio::join!(stdout_fut, stderr_fut, child.wait());
-                (stdout_bytes, stderr_bytes, wait_result)
+                let budget = tools::output_budget(tools::MAX_CMD_OUTPUT_TOTAL);
+                let (stdout, stderr, wait_result) = tokio::join!(
+                    tools::read_capped_text(stdout_opt, Arc::clone(&budget)),
+                    tools::read_capped_text(stderr_opt, budget),
+                    child.wait()
+                );
+                (stdout, stderr, wait_result)
             })
             .await;
 
             match result {
-                Ok((stdout_bytes, stderr_bytes, wait_result)) => {
+                Ok((mut stdout, mut stderr, wait_result)) => {
+                    if stdout.truncated {
+                        stdout.text.push_str("\n... (stdout truncated; combined output limit reached)");
+                    }
+                    if stderr.truncated {
+                        stderr.text.push_str("\n... (stderr truncated; combined output limit reached)");
+                    }
                     let res = ExecResponse {
-                        stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
-                        stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
+                        stdout: stdout.text,
+                        stderr: stderr.text,
                         status: wait_result.ok().and_then(|s| s.code()),
                     };
                     (StatusCode::OK, Json(res)).into_response()

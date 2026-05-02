@@ -2,15 +2,25 @@ use axum::http::HeaderMap;
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use crate::config::AppConfig;
 use crate::ws::AppState;
 
-/// Maximum bytes to read from a command's stdout or stderr before truncating.
-/// Prevents OOM from commands that produce unbounded output.
-const MAX_CMD_OUTPUT: usize = 10 * 1024 * 1024; // 10 MiB
+/// Combined stdout + stderr bytes captured from command tools.
+/// Excess output is drained but not retained, preventing unbounded memory use.
+pub(crate) const MAX_CMD_OUTPUT_TOTAL: usize = 10 * 1024 * 1024; // 10 MiB
 
 /// Maximum file size that `read_file` will load into memory.
-const MAX_READ_FILE: u64 = 50 * 1024 * 1024; // 50 MiB
+const MAX_READ_FILE: u64 = 8 * 1024 * 1024; // 8 MiB
+
+/// Maximum custom index.html size accepted from disk.
+pub(crate) const MAX_CUSTOM_INDEX_SIZE: u64 = 2 * 1024 * 1024; // 2 MiB
+
+/// Bytes sampled to classify files before deciding whether full reads are safe.
+const FILE_TYPE_SAMPLE_SIZE: usize = 8 * 1024;
 
 // ── Tool definitions (camelCase, Claude Code inspired) ───────────────────────
 
@@ -54,7 +64,7 @@ fn tool_bash() -> Value {
 fn tool_read_file() -> Value {
     json!({
         "name": "read_file",
-        "description": "Read the complete contents of a file as UTF-8 text. Use this to inspect source code, configuration files, logs, or any text-based file. Returns the raw file content.",
+        "description": "Read the complete contents of a UTF-8 text file. Use this to inspect source code, configuration files, logs, or any text-based file. Binary files are not read; metadata and file type information are returned instead.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -261,6 +271,12 @@ pub fn handle_tools_list() -> Value {
     TOOLS.clone()
 }
 
+pub fn handle_tools_list_json() -> &'static str {
+    static TOOLS_JSON: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| serde_json::to_string(&handle_tools_list()).unwrap_or_default());
+    TOOLS_JSON.as_str()
+}
+
 /// Unified authentication check for both MCP and REST APIs
 pub fn check_auth(state: &AppState, headers: &HeaderMap) -> bool {
     let cfg = &state.config;
@@ -455,19 +471,25 @@ async fn run_simple_command_with_timeout(
     let stderr_pipe = child.stderr.take();
 
     match tokio::time::timeout(timeout, async {
+        let budget = output_budget(MAX_CMD_OUTPUT_TOTAL);
         let (out, err, wait) = tokio::join!(
-            read_capped(stdout_pipe, MAX_CMD_OUTPUT),
-            read_capped(stderr_pipe, MAX_CMD_OUTPUT),
+            read_capped_text(stdout_pipe, Arc::clone(&budget)),
+            read_capped_text(stderr_pipe, budget),
             child.wait()
         );
         (out, err, wait)
     }).await {
         Ok((out, err, wait)) => {
-            let mut text = String::from_utf8_lossy(&out).into_owned();
-            let stderr = String::from_utf8_lossy(&err);
-            if !stderr.is_empty() {
+            let mut text = out.text;
+            if out.truncated {
+                text.push_str("\n... (stdout truncated; combined output limit reached)");
+            }
+            if !err.text.is_empty() {
                 if !text.is_empty() { text.push_str("\n--- stderr ---\n"); }
-                text.push_str(&stderr);
+                text.push_str(&err.text);
+            }
+            if err.truncated {
+                text.push_str("\n... (stderr truncated; combined output limit reached)");
             }
             if text.is_empty() { text = "(no output)".into(); }
             if wait.map(|s| s.success()).unwrap_or(false) {
@@ -531,15 +553,17 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
 
     let timeout = tokio::time::Duration::from_secs(timeout_secs);
     let result = tokio::time::timeout(timeout, async {
-        let stdout_fut = read_capped(stdout_pipe, MAX_CMD_OUTPUT);
-        let stderr_fut = read_capped(stderr_pipe, MAX_CMD_OUTPUT);
-        let (stdout_bytes, stderr_bytes, wait_res) =
-            tokio::join!(stdout_fut, stderr_fut, child.wait());
-        (stdout_bytes, stderr_bytes, wait_res)
+        let budget = output_budget(MAX_CMD_OUTPUT_TOTAL);
+        let (stdout, stderr, wait_res) = tokio::join!(
+            read_capped_text(stdout_pipe, Arc::clone(&budget)),
+            read_capped_text(stderr_pipe, budget),
+            child.wait()
+        );
+        (stdout, stderr, wait_res)
     })
     .await;
 
-    let (stdout_bytes, stderr_bytes, wait_res) = match result {
+    let (stdout, stderr, wait_res) = match result {
         Ok(t) => t,
         Err(_) => {
             // Kill the child on timeout so it doesn't linger.
@@ -551,26 +575,21 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
         }
     };
 
-    let stdout_str = String::from_utf8_lossy(&stdout_bytes);
-    let stderr_str = String::from_utf8_lossy(&stderr_bytes);
     let status = wait_res.ok();
     let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
 
-    let mut text = String::new();
-    if !stdout_str.is_empty() {
-        text.push_str(&stdout_str);
+    let mut text = stdout.text;
+    if stdout.truncated {
+        text.push_str("\n... (stdout truncated; combined output limit reached)");
     }
-    if stdout_bytes.len() >= MAX_CMD_OUTPUT {
-        text.push_str("\n... (stdout truncated at 10 MiB)");
-    }
-    if !stderr_str.is_empty() {
+    if !stderr.text.is_empty() {
         if !text.is_empty() {
             text.push_str("\n--- stderr ---\n");
         }
-        text.push_str(&stderr_str);
+        text.push_str(&stderr.text);
     }
-    if stderr_bytes.len() >= MAX_CMD_OUTPUT {
-        text.push_str("\n... (stderr truncated at 10 MiB)");
+    if stderr.truncated {
+        text.push_str("\n... (stderr truncated; combined output limit reached)");
     }
     if text.is_empty() {
         text = "(no output)".into();
@@ -589,7 +608,10 @@ async fn read_file_tool(args: &Value) -> Result<Value, String> {
     let path = extract_string(args, "path")?;
 
     // Check file size before reading to prevent OOM on huge files.
-    match tokio::fs::metadata(&path).await {
+    let meta = match tokio::fs::metadata(&path).await {
+        Ok(m) if !m.is_file() => {
+            return Ok(tool_error(format!("'{}' is not a regular file", path)));
+        }
         Ok(m) if m.len() > MAX_READ_FILE => {
             return Ok(tool_error(format!(
                 "File '{}' is too large ({} bytes, max {} MiB). Use bash tool with head/tail instead.",
@@ -601,12 +623,31 @@ async fn read_file_tool(args: &Value) -> Result<Value, String> {
         Err(e) => {
             return Ok(tool_error(format!("Failed to read '{}': {}", path, e)));
         }
-        _ => {}
+        Ok(m) => m,
+    };
+
+    let sample = match read_file_sample(&path).await {
+        Ok(sample) => sample,
+        Err(e) => return Ok(tool_error(format!("Failed to inspect '{}': {}", path, e))),
+    };
+
+    if sample_is_binary(&sample) {
+        let metadata = format_file_metadata(&path, &meta).await;
+        return Ok(tool_success(format!(
+            "Binary file not read. Returning metadata only.\n{}",
+            metadata
+        )));
     }
 
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => Ok(tool_success(content)),
-        Err(e) => Ok(tool_error(format!("Failed to read '{}': {}", path, e))),
+        Err(e) => {
+            let metadata = format_file_metadata(&path, &meta).await;
+            Ok(tool_success(format!(
+                "File is not valid UTF-8 text and was not read. Returning metadata only.\n{}\nRead error: {}",
+                metadata, e
+            )))
+        }
     }
 }
 
@@ -715,60 +756,88 @@ async fn edit_file_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> 
 async fn read_file_metadata_tool(args: &Value) -> Result<Value, String> {
     let path = extract_string(args, "path")?;
 
-    let metadata_result = tokio::fs::metadata(&path).await;
-
-    match metadata_result {
-        Ok(meta) => {
-            let file_type = if meta.is_dir() {
-                "directory"
-            } else if meta.is_file() {
-                "file"
-            } else if meta.is_symlink() {
-                "symlink"
-            } else {
-                "other"
-            };
-
-            let permissions = if cfg!(unix) {
-                format!("{:o}", meta.permissions().mode() & 0o777)
-            } else {
-                "N/A".to_string()
-            };
-
-            let readonly = meta.permissions().readonly();
-
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-
-            // Detect detailed file type information
-            let file_info = if meta.is_file() {
-                detect_file_type(&path).await
-            } else {
-                "N/A".to_string()
-            };
-
-            let info = format!(
-                "Path: {}\n\
-                 Type: {}\n\
-                 Size: {} bytes\n\
-                 Permissions: {}\n\
-                 Read-only: {}\n\
-                 Modified: {} (unix timestamp)\n\
-                 File Info: {}",
-                path, file_type, meta.len(), permissions, readonly, modified, file_info
-            );
-
-            Ok(tool_success(info))
-        }
+    match tokio::fs::metadata(&path).await {
+        Ok(meta) => Ok(tool_success(format_file_metadata(&path, &meta).await)),
         Err(e) => Ok(tool_error(format!(
             "Failed to read metadata of '{}': {}",
             path, e
         ))),
     }
+}
+
+async fn format_file_metadata(path: &str, meta: &std::fs::Metadata) -> String {
+    let file_type = if meta.is_dir() {
+        "directory"
+    } else if meta.is_file() {
+        "file"
+    } else if meta.is_symlink() {
+        "symlink"
+    } else {
+        "other"
+    };
+
+    let permissions = if cfg!(unix) {
+        format!("{:o}", meta.permissions().mode() & 0o777)
+    } else {
+        "N/A".to_string()
+    };
+
+    let readonly = meta.permissions().readonly();
+
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let file_info = if meta.is_file() {
+        detect_file_type(path).await
+    } else {
+        "N/A".to_string()
+    };
+
+    format!(
+        "Path: {}\n\
+         Type: {}\n\
+         Size: {} bytes\n\
+         Permissions: {}\n\
+         Read-only: {}\n\
+         Modified: {} (unix timestamp)\n\
+         File Info: {}",
+        path,
+        file_type,
+        meta.len(),
+        permissions,
+        readonly,
+        modified,
+        file_info
+    )
+}
+
+async fn read_file_sample(path: &str) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut sample = vec![0u8; FILE_TYPE_SAMPLE_SIZE];
+    let n = file.read(&mut sample).await?;
+    sample.truncate(n);
+    Ok(sample)
+}
+
+fn sample_is_binary(sample: &[u8]) -> bool {
+    if sample.is_empty() {
+        return false;
+    }
+
+    if !is_text_content(sample) {
+        return true;
+    }
+
+    infer::get(sample).is_some_and(|kind| {
+        let mime = kind.mime_type();
+        !(mime.starts_with("text/") || mime == "application/json" || mime.ends_with("+xml"))
+    })
 }
 
 /// Detect file type using magic bytes (via infer crate) and MIME type guessing.
@@ -791,7 +860,7 @@ async fn detect_file_type(path: &str) -> String {
         Ok(f) => f,
         Err(e) => return format!("unable to read file: {}", e),
     };
-    let mut sample = vec![0u8; 8192];
+    let mut sample = vec![0u8; FILE_TYPE_SAMPLE_SIZE];
     let n = match file.read(&mut sample).await {
         Ok(0) => return "empty file".to_string(),
         Ok(n) => n,
@@ -1064,34 +1133,45 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Read from an async reader up to `max` bytes, then discard the rest.
-/// Returns the capped buffer.  Used to prevent OOM from unbounded command output.
-pub(crate) async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+pub(crate) struct CappedOutput {
+    pub(crate) text: String,
+    pub(crate) truncated: bool,
+}
+
+type OutputBudget = Arc<AtomicUsize>;
+
+pub(crate) fn output_budget(max: usize) -> OutputBudget {
+    Arc::new(AtomicUsize::new(max))
+}
+
+/// Read from an async reader into a shared output budget, then discard the rest.
+/// This bounds combined stdout/stderr memory while letting the child finish.
+pub(crate) async fn read_capped_text<R: tokio::io::AsyncRead + Unpin>(
     reader: Option<R>,
-    max: usize,
-) -> Vec<u8> {
+    budget: OutputBudget,
+) -> CappedOutput {
     use tokio::io::AsyncReadExt;
 
     let mut reader = match reader {
         Some(r) => r,
-        None => return Vec::new(),
+        None => return CappedOutput { text: String::new(), truncated: false },
     };
-    let mut buf = Vec::with_capacity(max.min(64 * 1024)); // start small
-    let mut total = 0usize;
+    let mut text = String::with_capacity(8 * 1024);
+    let mut truncated = false;
     let mut tmp = [0u8; 8192];
+
     loop {
         match reader.read(&mut tmp).await {
             Ok(0) => break,
             Ok(n) => {
-                let remaining = max.saturating_sub(total);
-                let take = n.min(remaining);
+                let take = take_output_budget(&budget, n);
                 if take > 0 {
-                    buf.extend_from_slice(&tmp[..take]);
+                    text.push_str(&String::from_utf8_lossy(&tmp[..take]));
                 }
-                total += n;
-                if total >= max {
-                    // Keep draining to avoid SIGPIPE killing the child, but
-                    // don't store anything beyond the cap.
+                if take < n {
+                    truncated = true;
+                    // Keep draining to avoid SIGPIPE killing the child while
+                    // retaining no additional command output.
                     tokio::io::copy(&mut reader, &mut tokio::io::sink()).await.ok();
                     break;
                 }
@@ -1099,5 +1179,25 @@ pub(crate) async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
             Err(_) => break,
         }
     }
-    buf
+
+    CappedOutput { text, truncated }
+}
+
+fn take_output_budget(budget: &AtomicUsize, requested: usize) -> usize {
+    let mut available = budget.load(Ordering::Relaxed);
+    loop {
+        if available == 0 {
+            return 0;
+        }
+        let take = requested.min(available);
+        match budget.compare_exchange_weak(
+            available,
+            available - take,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return take,
+            Err(next) => available = next,
+        }
+    }
 }

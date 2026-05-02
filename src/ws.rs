@@ -2,7 +2,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{RawQuery, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,6 +50,9 @@ pub struct AppState {
     /// Pre-built `"Basic <base64(user:pass)>"` string for O(1) Basic Auth
     /// comparison on each WebSocket upgrade.  `None` when auth is disabled.
     pub expected_auth: Option<String>,
+
+    /// Optional custom index.html loaded once at startup.
+    pub custom_index: Option<&'static [u8]>,
 
     /// Active MCP SSE channels.
     ///
@@ -293,8 +296,8 @@ async fn pty_main_loop(
     let mut buf = [0u8; PTY_BUF_SIZE];
     // Pre-allocate the coalesce buffer with the MSG_OUTPUT type byte already
     // at index 0, so each flush is a single Binary frame with no header copy.
-    let mut coalesce: Vec<u8> = Vec::with_capacity(MAX_COALESCE_SIZE + 1);
-    coalesce.push(MSG_OUTPUT);
+    let mut coalesce = BytesMut::with_capacity(MAX_COALESCE_SIZE + 1);
+    coalesce.extend_from_slice(&[MSG_OUTPUT]);
 
     let mut ping_ticker = time::interval(ping_interval);
     ping_ticker.tick().await; // discard the immediate first tick
@@ -363,11 +366,11 @@ async fn pty_main_loop(
 /// allocation on every flush.
 ///
 /// Returns `true` if the outbound channel is closed (caller should stop).
-async fn flush_coalesce(coalesce: &mut Vec<u8>, tx: &mpsc::Sender<Message>) -> bool {
+async fn flush_coalesce(coalesce: &mut BytesMut, tx: &mpsc::Sender<Message>) -> bool {
     if coalesce.len() > 1 {
-        let payload = Bytes::copy_from_slice(&coalesce[..]);
-        coalesce.clear();
-        coalesce.push(MSG_OUTPUT);
+        let payload = coalesce.split_to(coalesce.len()).freeze();
+        coalesce.reserve(MAX_COALESCE_SIZE + 1);
+        coalesce.extend_from_slice(&[MSG_OUTPUT]);
         return tx.send(Message::Binary(payload)).await.is_err();
     }
     false
