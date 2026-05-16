@@ -1,6 +1,6 @@
 <script>
   import FileManager from "./FileManager.svelte";
-  import CodeEditor from "./CodeEditor.svelte";
+  import CodeEditor, { supportedLangs } from "./CodeEditor.svelte";
   import TermTab from "./TermTab.svelte";
   import { fileIcon } from "./fileIcon.js";
 
@@ -41,7 +41,7 @@
   /** @param {string} path @param {string} content @param {boolean} isBinary @param {string} error */
   function openFileTab(path, content, isBinary, error) {
     if (fileTabs.find(t => t.id === path)) { activeTab = path; return; }
-    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "" });
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "" });
     tabOrder.push(path);
     activeTab = path;
   }
@@ -290,10 +290,11 @@
               <code class="fm-binary-path">{tab.path}</code>
             </div>
           {:else}
-            {#key tab.id}
+            {#key tab.id + tab.langOverride}
             <CodeEditor
               path={tab.path}
               value={tab.editContent}
+              lang={tab.langOverride}
               searchTrigger={searchTrigger}
               onchange={(v) => { tab.editContent = v; }}
               onsave={async () => {
@@ -312,10 +313,13 @@
           {/if}
 
           <div class="fm-breadcrumb">
-            {#each tab.path.split("/").filter(Boolean) as part, i}
-              {#if i > 0}<span class="fm-bc-sep">›</span>{/if}
-              <span class="fm-bc-part">{part}</span>
-            {/each}
+            <span class="fm-bc-part">{tab.path}</span>
+            <select class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.langOverride = e.target.value; }}>
+              <option value="">Auto</option>
+              {#each supportedLangs as l}
+                <option value={l}>{l}</option>
+              {/each}
+            </select>
           </div>
         </div>
       {/if}

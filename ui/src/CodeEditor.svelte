@@ -1,13 +1,4 @@
-<script>
-  import { onMount, onDestroy } from "svelte";
-  import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
-  import { EditorState } from "@codemirror/state";
-  import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-  import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from "@codemirror/language";
-  import { search, searchKeymap, findNext, findPrevious, selectMatches, getSearchQuery, setSearchQuery, SearchQuery, closeSearchPanel, openSearchPanel, replaceNext, replaceAll } from "@codemirror/search";
-  import { oneDark } from "@codemirror/theme-one-dark";
-  import { showMinimap } from "@replit/codemirror-minimap";
-
+<script module>
   const langMap = {
     js:     () => import("@codemirror/lang-javascript").then(m => m.javascript()),
     mjs:    () => import("@codemirror/lang-javascript").then(m => m.javascript()),
@@ -30,34 +21,119 @@
     yaml:   () => import("@codemirror/lang-yaml").then(m => m.yaml()),
     yml:    () => import("@codemirror/lang-yaml").then(m => m.yaml()),
     go:     () => import("@codemirror/lang-go").then(m => m.go()),
-    toml:   () => Promise.all([
-                import("@codemirror/legacy-modes/mode/toml"),
-                import("@codemirror/language"),
-              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.toml)),
-    sh:     () => Promise.all([
-                import("@codemirror/legacy-modes/mode/shell"),
-                import("@codemirror/language"),
-              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
-    bash:   () => Promise.all([
-                import("@codemirror/legacy-modes/mode/shell"),
-                import("@codemirror/language"),
-              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
-    zsh:    () => Promise.all([
-                import("@codemirror/legacy-modes/mode/shell"),
-                import("@codemirror/language"),
-              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
-    fish:   () => Promise.all([
-                import("@codemirror/legacy-modes/mode/shell"),
-                import("@codemirror/language"),
-              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
-    dockerfile: () => Promise.all([
-                import("@codemirror/legacy-modes/mode/dockerfile"),
-                import("@codemirror/language"),
-              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dockerFile)),
+    toml:   () => Promise.all([import("@codemirror/legacy-modes/mode/toml"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.toml)),
+    sh:     () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
+    bash:   () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
+    zsh:    () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
+    fish:   () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
+    dockerfile: () => Promise.all([import("@codemirror/legacy-modes/mode/dockerfile"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dockerFile)),
+    config:     () => Promise.all([import("@codemirror/legacy-modes/mode/properties"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.properties)),
+    properties: () => Promise.all([import("@codemirror/legacy-modes/mode/properties"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.properties)),
+    ini:        () => Promise.all([import("@codemirror/legacy-modes/mode/properties"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.properties)),
+    lua:    () => Promise.all([import("@codemirror/legacy-modes/mode/lua"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.lua)),
+    rb:     () => Promise.all([import("@codemirror/legacy-modes/mode/ruby"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.ruby)),
+    ruby:   () => Promise.all([import("@codemirror/legacy-modes/mode/ruby"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.ruby)),
+    pl:     () => Promise.all([import("@codemirror/legacy-modes/mode/perl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.perl)),
+    pm:     () => Promise.all([import("@codemirror/legacy-modes/mode/perl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.perl)),
+    perl:   () => Promise.all([import("@codemirror/legacy-modes/mode/perl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.perl)),
+    r:      () => Promise.all([import("@codemirror/legacy-modes/mode/r"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.r)),
+    R:      () => Promise.all([import("@codemirror/legacy-modes/mode/r"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.r)),
+    swift:  () => Promise.all([import("@codemirror/legacy-modes/mode/swift"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.swift)),
+    kt:     () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.kotlin)),
+    kotlin: () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.kotlin)),
+    java:   () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.java)),
+    cs:     () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.csharp)),
+    csharp: () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.csharp)),
+    scala:  () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.scala)),
+    dart:   () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dart)),
+    groovy: () => Promise.all([import("@codemirror/legacy-modes/mode/groovy"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.groovy)),
+    jl:     () => Promise.all([import("@codemirror/legacy-modes/mode/julia"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.julia)),
+    julia:  () => Promise.all([import("@codemirror/legacy-modes/mode/julia"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.julia)),
+    hs:     () => Promise.all([import("@codemirror/legacy-modes/mode/haskell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.haskell)),
+    haskell:() => Promise.all([import("@codemirror/legacy-modes/mode/haskell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.haskell)),
+    clj:    () => Promise.all([import("@codemirror/legacy-modes/mode/clojure"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.clojure)),
+    cljs:   () => Promise.all([import("@codemirror/legacy-modes/mode/clojure"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.clojure)),
+    erl:    () => Promise.all([import("@codemirror/legacy-modes/mode/erlang"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.erlang)),
+    elm:    () => Promise.all([import("@codemirror/legacy-modes/mode/elm"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.elm)),
+    ex:     () => Promise.all([import("@codemirror/legacy-modes/mode/erlang"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.erlang)),
+    exs:    () => Promise.all([import("@codemirror/legacy-modes/mode/erlang"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.erlang)),
+    ml:     () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.oCaml)),
+    mli:    () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.oCaml)),
+    fs:     () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.fSharp)),
+    fsx:    () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.fSharp)),
+    sml:    () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sml)),
+    coffee: () => Promise.all([import("@codemirror/legacy-modes/mode/coffeescript"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.coffeeScript)),
+    cr:     () => Promise.all([import("@codemirror/legacy-modes/mode/crystal"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.crystal)),
+    d:      () => Promise.all([import("@codemirror/legacy-modes/mode/d"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.d)),
+    f:      () => Promise.all([import("@codemirror/legacy-modes/mode/fortran"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.fortran)),
+    f90:    () => Promise.all([import("@codemirror/legacy-modes/mode/fortran"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.fortran)),
+    pas:    () => Promise.all([import("@codemirror/legacy-modes/mode/pascal"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.pascal)),
+    scm:    () => Promise.all([import("@codemirror/legacy-modes/mode/scheme"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.scheme)),
+    lisp:   () => Promise.all([import("@codemirror/legacy-modes/mode/commonlisp"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.commonLisp)),
+    cl:     () => Promise.all([import("@codemirror/legacy-modes/mode/commonlisp"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.commonLisp)),
+    tcl:    () => Promise.all([import("@codemirror/legacy-modes/mode/tcl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.tcl)),
+    m:      () => Promise.all([import("@codemirror/legacy-modes/mode/octave"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.octave)),
+    vb:     () => Promise.all([import("@codemirror/legacy-modes/mode/vb"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.vb)),
+    vbs:    () => Promise.all([import("@codemirror/legacy-modes/mode/vbscript"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.vbScript)),
+    ps1:    () => Promise.all([import("@codemirror/legacy-modes/mode/powershell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.powerShell)),
+    psm1:   () => Promise.all([import("@codemirror/legacy-modes/mode/powershell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.powerShell)),
+    v:      () => Promise.all([import("@codemirror/legacy-modes/mode/verilog"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.verilog)),
+    sv:     () => Promise.all([import("@codemirror/legacy-modes/mode/verilog"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.verilog)),
+    vhd:    () => Promise.all([import("@codemirror/legacy-modes/mode/vhdl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.vhdl)),
+    vhdl:   () => Promise.all([import("@codemirror/legacy-modes/mode/vhdl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.vhdl)),
+    diff:   () => Promise.all([import("@codemirror/legacy-modes/mode/diff"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.diff)),
+    patch:  () => Promise.all([import("@codemirror/legacy-modes/mode/diff"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.diff)),
+    proto:  () => Promise.all([import("@codemirror/legacy-modes/mode/protobuf"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.protobuf)),
+    cmake:  () => Promise.all([import("@codemirror/legacy-modes/mode/cmake"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.cmake)),
+    nginx:  () => Promise.all([import("@codemirror/legacy-modes/mode/nginx"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.nginx)),
+    pug:    () => Promise.all([import("@codemirror/legacy-modes/mode/pug"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.pug)),
+    jade:   () => Promise.all([import("@codemirror/legacy-modes/mode/pug"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.pug)),
+    styl:   () => Promise.all([import("@codemirror/legacy-modes/mode/stylus"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.stylus)),
+    sass:   () => Promise.all([import("@codemirror/legacy-modes/mode/sass"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sass)),
+    tex:    () => Promise.all([import("@codemirror/legacy-modes/mode/stex"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.stex)),
+    latex:  () => Promise.all([import("@codemirror/legacy-modes/mode/stex"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.stex)),
+    textile:() => Promise.all([import("@codemirror/legacy-modes/mode/textile"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.textile)),
+    sparql: () => Promise.all([import("@codemirror/legacy-modes/mode/sparql"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sparql)),
+    ttl:    () => Promise.all([import("@codemirror/legacy-modes/mode/turtle"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.turtle)),
+    wast:   () => Promise.all([import("@codemirror/legacy-modes/mode/wast"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.wast)),
+    wat:    () => Promise.all([import("@codemirror/legacy-modes/mode/wast"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.wast)),
+    hx:     () => Promise.all([import("@codemirror/legacy-modes/mode/haxe"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.haxe)),
+    nsi:    () => Promise.all([import("@codemirror/legacy-modes/mode/nsis"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.nsis)),
+    nsis:   () => Promise.all([import("@codemirror/legacy-modes/mode/nsis"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.nsis)),
+    feature:() => Promise.all([import("@codemirror/legacy-modes/mode/gherkin"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.gherkin)),
+    pp:     () => Promise.all([import("@codemirror/legacy-modes/mode/puppet"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.puppet)),
+    q:      () => Promise.all([import("@codemirror/legacy-modes/mode/q"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.q)),
+    apl:    () => Promise.all([import("@codemirror/legacy-modes/mode/apl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.apl)),
+    bf:     () => Promise.all([import("@codemirror/legacy-modes/mode/brainfuck"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.brainfuck)),
+    forth:  () => Promise.all([import("@codemirror/legacy-modes/mode/forth"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.forth)),
+    factor: () => Promise.all([import("@codemirror/legacy-modes/mode/factor"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.factor)),
+    oz:     () => Promise.all([import("@codemirror/legacy-modes/mode/oz"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.oz)),
+    pig:    () => Promise.all([import("@codemirror/legacy-modes/mode/pig"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.pig)),
+    sas:    () => Promise.all([import("@codemirror/legacy-modes/mode/sas"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sas)),
+    st:     () => Promise.all([import("@codemirror/legacy-modes/mode/smalltalk"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.smalltalk)),
+    cob:    () => Promise.all([import("@codemirror/legacy-modes/mode/cobol"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.cobol)),
+    cobol:  () => Promise.all([import("@codemirror/legacy-modes/mode/cobol"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.cobol)),
+    ebnf:   () => Promise.all([import("@codemirror/legacy-modes/mode/ebnf"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.ebnf)),
+    dylan:  () => Promise.all([import("@codemirror/legacy-modes/mode/dylan"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dylan)),
+    ls:     () => Promise.all([import("@codemirror/legacy-modes/mode/livescript"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.liveScript)),
+    mathematica: () => Promise.all([import("@codemirror/legacy-modes/mode/mathematica"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.mathematica)),
+    wl:     () => Promise.all([import("@codemirror/legacy-modes/mode/mathematica"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.mathematica)),
   };
 
-  /** @type {{ path: string, value: string, readonly?: boolean, searchTrigger?: number, onchange?: (v: string) => void, onsave?: () => void }} */
-  let { path, value, readonly = false, searchTrigger = 0, onchange, onsave } = $props();
+  export const supportedLangs = Object.keys(langMap).sort();
+</script>
+<script>
+  import { onMount, onDestroy } from "svelte";
+  import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
+  import { EditorState } from "@codemirror/state";
+  import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+  import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from "@codemirror/language";
+  import { search, searchKeymap, findNext, findPrevious, selectMatches, getSearchQuery, setSearchQuery, SearchQuery, closeSearchPanel, openSearchPanel, replaceNext, replaceAll } from "@codemirror/search";
+  import { oneDark } from "@codemirror/theme-one-dark";
+  import { showMinimap } from "@replit/codemirror-minimap";
+
+  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, searchTrigger?: number, onchange?: (v: string) => void, onsave?: () => void }} */
+  let { path, value, readonly = false, lang = "", searchTrigger = 0, onchange, onsave } = $props();
 
   /** @type {HTMLElement} */
   let container;
@@ -172,7 +248,7 @@
     const fname = path.split("/").pop()?.toLowerCase() ?? "";
     const SHELL_NAMES = new Set(['.bashrc','.bash_profile','.bash_aliases','.zshrc','.zprofile','.profile','.fishrc','bashrc','zshrc','profile']);
     const isDockerfile = fname === 'dockerfile' || fname.startsWith('dockerfile.');
-    const ext = isDockerfile ? "dockerfile" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? "");
+    const ext = lang || (isDockerfile ? "dockerfile" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? ""));
     const langExt = langMap[ext] ? await langMap[ext]() : [];
 
     const extensions = [

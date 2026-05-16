@@ -306,6 +306,17 @@ html, body {
 .fm-bc-sep { color: var(--border); }
 .fm-bc-part { color: var(--text-subtle); }
 .fm-bc-last { color: var(--text-primary); }
+.fm-lang-select {
+  margin-left: auto; padding: 1px 4px;
+  background: var(--bg-surface); color: var(--text-subtle);
+  border: 1px solid var(--border); border-radius: 3px;
+  font-size: 13px; cursor: pointer; outline: none;
+  scrollbar-color: var(--border) transparent; scrollbar-width: thin;
+}
+.fm-lang-select::-webkit-scrollbar { width: 3px; }
+.fm-lang-select::-webkit-scrollbar-track { background: transparent; }
+.fm-lang-select::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.fm-lang-select:hover { border-color: var(--text-subtle); }
 
 /* Binary / empty / error */
 .fm-binary {
