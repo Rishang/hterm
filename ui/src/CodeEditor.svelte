@@ -34,6 +34,26 @@
                 import("@codemirror/legacy-modes/mode/toml"),
                 import("@codemirror/language"),
               ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.toml)),
+    sh:     () => Promise.all([
+                import("@codemirror/legacy-modes/mode/shell"),
+                import("@codemirror/language"),
+              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
+    bash:   () => Promise.all([
+                import("@codemirror/legacy-modes/mode/shell"),
+                import("@codemirror/language"),
+              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
+    zsh:    () => Promise.all([
+                import("@codemirror/legacy-modes/mode/shell"),
+                import("@codemirror/language"),
+              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
+    fish:   () => Promise.all([
+                import("@codemirror/legacy-modes/mode/shell"),
+                import("@codemirror/language"),
+              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
+    dockerfile: () => Promise.all([
+                import("@codemirror/legacy-modes/mode/dockerfile"),
+                import("@codemirror/language"),
+              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dockerFile)),
   };
 
   /** @type {{ path: string, value: string, readonly?: boolean, onchange?: (v: string) => void, onsave?: () => void }} */
@@ -147,7 +167,10 @@
   }
 
   onMount(async () => {
-    const ext = path.split(".").pop()?.toLowerCase() ?? "";
+    const fname = path.split("/").pop()?.toLowerCase() ?? "";
+    const SHELL_NAMES = new Set(['.bashrc','.bash_profile','.bash_aliases','.zshrc','.zprofile','.profile','.fishrc','bashrc','zshrc','profile']);
+    const isDockerfile = fname === 'dockerfile' || fname.startsWith('dockerfile.');
+    const ext = isDockerfile ? "dockerfile" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? "");
     const langExt = langMap[ext] ? await langMap[ext]() : [];
 
     const extensions = [
@@ -180,7 +203,15 @@
       }),
       EditorView.theme({
         "&": { height: "100%", fontSize: "13px" },
-        ".cm-scroller": { fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace", overflow: "auto" },
+        ".cm-scroller": {
+          fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
+          overflow: "auto",
+          scrollbarColor: "var(--border) transparent",
+          scrollbarWidth: "thin",
+        },
+        ".cm-scroller::-webkit-scrollbar": { width: "3px", height: "3px" },
+        ".cm-scroller::-webkit-scrollbar-track": { background: "transparent" },
+        ".cm-scroller::-webkit-scrollbar-thumb": { background: "var(--border)", borderRadius: "2px" },
         ".cm-content": { padding: "8px 0" },
       }),
       langExt,

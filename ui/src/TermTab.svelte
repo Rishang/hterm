@@ -36,14 +36,27 @@
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
   let clipboardReadGranted = false, clipboardWriteGranted = false;
+  let lockedCols = 0;
 
   function doFit() {
     if (!active) return;
-    try { fitAddon?.fit(); } catch {}
+    if (!term || !fitAddon) return;
+    let proposed;
+    try { proposed = fitAddon.proposeDimensions(); } catch {}
+    if (!proposed) return;
+
+    // Keep columns stable after the initial PTY setup. Forwarding every
+    // width-only panel resize to the shell emits repeated SIGWINCH events,
+    // which can redraw the prompt and make Enter appear to print/duplicate it.
+    const cols = lockedCols || proposed.cols;
+    const rows = proposed.rows;
+    if (!lockedCols) lockedCols = cols;
+    if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
+    sendResize(cols, rows);
   }
   function scheduleFit() {
     if (resizeTimer) clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { doFit(); resizeTimer = null; }, 150);
+    resizeTimer = setTimeout(() => { doFit(); resizeTimer = null; }, RESIZE_DEBOUNCE_MS);
   }
 
   function sendBinary(type, payload) {
@@ -105,8 +118,7 @@
       reconnectDelay = RECONNECT_DELAY_MS;
       lastCols = 0; lastRows = 0;
       if (resizeSendTimer) { clearTimeout(resizeSendTimer); resizeSendTimer = null; }
-      try { fitAddon?.fit(); } catch {}
-      if (term) sendResize(term.cols, term.rows);
+      doFit();
     };
     ws.onmessage = (e) => {
       if (typeof e.data === "string") return;
@@ -131,12 +143,14 @@
     ws.onerror = () => ws?.close();
   }
 
-  // Re-fit and focus when this tab becomes active
+
+  // Re-fit and focus when this tab becomes active while preserving the
+  // locked-column resize behavior above.
   $effect(() => {
     if (active && term) {
       setTimeout(() => {
         doFit();
-        // Only focus if terminal doesn't already have focus (prevents spurious input)
+        term.refresh(0, term.rows - 1);
         const textarea = container?.querySelector('textarea');
         if (textarea && document.activeElement !== textarea) term.focus();
       }, 30);
@@ -166,17 +180,13 @@
     term.loadAddon(new WebLinksAddon());
     term.open(container);
 
-    try {
-      const { WebglAddon } = await import("@xterm/addon-webgl");
-      const gl = new WebglAddon();
-      gl.onContextLoss(() => gl.dispose());
-      term.loadAddon(gl);
-    } catch {}
-
     window.addEventListener("resize", scheduleFit);
     if (window.visualViewport) window.visualViewport.addEventListener("resize", scheduleFit);
+    resizeObserver = new ResizeObserver(() => {
+      scheduleFit();
+    });
+    resizeObserver.observe(container);
     term.onData((d) => sendBinary(MSG_INPUT, d));
-    term.onResize(({ cols, rows }) => sendResize(cols, rows));
     term.options.cursorBlink = true;
 
     term.attachCustomKeyEventHandler((e) => {
@@ -259,5 +269,6 @@
     min-width: 0;
     min-height: 0;
     overflow: hidden;
+    padding: 1px 2px;
   }
 </style>

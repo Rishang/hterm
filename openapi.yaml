@@ -423,7 +423,7 @@ paths:
       parameters:
         - name: path
           in: query
-          description: Directory path to list (default: /)
+          description: "Directory path to list (default: /)"
           schema:
             type: string
             example: "/home/user/projects"
@@ -449,8 +449,142 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: Create a file or directory
+      description: Create a new empty file or directory at an absolute path.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFileRequest'
+            examples:
+              file:
+                summary: Create file
+                value:
+                  path: "/home/user/projects/new.txt"
+                  type: "file"
+              folder:
+                summary: Create folder
+                value:
+                  path: "/home/user/projects/docs"
+                  type: "folder"
+      responses:
+        '201':
+          description: File or directory created
+        '400':
+          description: Invalid path or filesystem error
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
+  /api/files/copy:
+    post:
+      summary: Copy a file or directory
+      description: |
+        Copy a file or directory recursively.
 
+        Directory copies where the destination is the source itself or one of its
+        descendants are rejected to avoid recursive self-copying.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CopyFileRequest'
+            example:
+              src: "/home/user/projects/docs"
+              dst: "/home/user/projects/docs-copy"
+      responses:
+        '201':
+          description: File or directory copied
+        '400':
+          description: Invalid path, recursive copy, or filesystem error
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/files/{path}:
+    patch:
+      summary: Rename or move a file or directory
+      description: Rename or move the file or directory identified by the URL-encoded path.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      parameters:
+        - name: path
+          in: path
+          required: true
+          description: URL-encoded absolute path without the leading slash. Slash separators remain path separators.
+          schema:
+            type: string
+          example: "home/user/projects/old%20name.txt"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameFileRequest'
+            example:
+              newPath: "/home/user/projects/new name.txt"
+      responses:
+        '200':
+          description: File or directory renamed or moved
+        '400':
+          description: Invalid path or filesystem error
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      summary: Delete a file or directory
+      description: Delete the file or directory identified by the URL-encoded path. Directories are removed recursively.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      parameters:
+        - name: path
+          in: path
+          required: true
+          description: URL-encoded absolute path without the leading slash. Slash separators remain path separators.
+          schema:
+            type: string
+          example: "home/user/projects/old%20name.txt"
+      responses:
+        '204':
+          description: File or directory deleted
+        '400':
+          description: Invalid path or filesystem error
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /openapi.json:
     get:
       summary: Get OpenAPI specification
       description: |
@@ -558,6 +692,46 @@ components:
         is_dir:
           type: boolean
           description: True if directory
+
+    CreateFileRequest:
+      type: object
+      required:
+        - path
+        - type
+      properties:
+        path:
+          type: string
+          description: Absolute path for the new file or directory
+          example: "/home/user/projects/new.txt"
+        type:
+          type: string
+          enum: [file, folder]
+          description: Entry type to create
+
+    RenameFileRequest:
+      type: object
+      required:
+        - newPath
+      properties:
+        newPath:
+          type: string
+          description: Absolute destination path
+          example: "/home/user/projects/new-name.txt"
+
+    CopyFileRequest:
+      type: object
+      required:
+        - src
+        - dst
+      properties:
+        src:
+          type: string
+          description: Absolute source path
+          example: "/home/user/projects/source"
+        dst:
+          type: string
+          description: Absolute destination path
+          example: "/home/user/projects/source-copy"
 
     ToolsList:
       type: object

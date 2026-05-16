@@ -2,7 +2,7 @@ use axum::{
     extract::{Query, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -95,4 +95,157 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_tools_handler))
         .route("/call", post(call_tool_handler))
+}
+
+// ── File CRUD ─────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CreateFileRequest {
+    path: String,
+    #[serde(rename = "type")]
+    kind: String, // "file" | "folder"
+}
+
+#[derive(Deserialize)]
+pub struct RenameFileRequest {
+    #[serde(rename = "newPath")]
+    new_path: String,
+}
+
+fn bad(msg: impl ToString) -> axum::response::Response {
+    (StatusCode::BAD_REQUEST, msg.to_string()).into_response()
+}
+
+fn safe_path(p: &str) -> Option<std::path::PathBuf> {
+    let p = std::path::Path::new(p);
+    // must be absolute and must not escape via ..
+    if !p.is_absolute() { return None; }
+    let clean = p.components().fold(std::path::PathBuf::new(), |mut acc, c| {
+        match c {
+            std::path::Component::ParentDir => { acc.pop(); acc }
+            std::path::Component::Normal(n) => { acc.push(n); acc }
+            std::path::Component::RootDir   => { acc.push("/"); acc }
+            _ => acc,
+        }
+    });
+    Some(clean)
+}
+
+pub async fn create_file_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateFileRequest>,
+) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let Some(path) = safe_path(&req.path) else { return bad("invalid path"); };
+    if req.kind == "folder" {
+        match std::fs::create_dir_all(&path) {
+            Ok(_)  => StatusCode::CREATED.into_response(),
+            Err(e) => bad(e),
+        }
+    } else {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(_)  => StatusCode::CREATED.into_response(),
+            Err(e) => bad(e),
+        }
+    }
+}
+
+pub async fn rename_file_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(tail): axum::extract::Path<String>,
+    Json(req): Json<RenameFileRequest>,
+) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let src = format!("/{}", tail);
+    let Some(src_path) = safe_path(&src) else { return bad("invalid source path"); };
+    let Some(dst_path) = safe_path(&req.new_path) else { return bad("invalid dest path"); };
+    if let Some(parent) = dst_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::rename(&src_path, &dst_path) {
+        Ok(_)  => StatusCode::OK.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+pub async fn delete_file_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(tail): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let p = format!("/{}", tail);
+    let Some(path) = safe_path(&p) else { return bad("invalid path"); };
+    let result = if path.is_dir() {
+        std::fs::remove_dir_all(&path)
+    } else {
+        std::fs::remove_file(&path)
+    };
+    match result {
+        Ok(_)  => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+pub fn files_router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/", get(list_files_handler).post(create_file_handler))
+        .route("/copy", post(copy_file_handler))
+        .route("/{*path}", patch(rename_file_handler).delete(delete_file_handler))
+}
+
+#[derive(Deserialize)]
+pub struct CopyFileRequest {
+    src: String,
+    dst: String,
+}
+
+pub async fn copy_file_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CopyFileRequest>,
+) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let Some(src) = safe_path(&req.src) else { return bad("invalid src path"); };
+    let Some(dst) = safe_path(&req.dst) else { return bad("invalid dst path"); };
+    if src.is_dir() && (dst == src || dst.starts_with(&src)) {
+        return bad("cannot copy a directory into itself");
+    }
+    if let Some(parent) = dst.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match copy_recursive(&src, &dst) {
+        Ok(_)  => StatusCode::CREATED.into_response(),
+        Err(e) => bad(e),
+    }
+}
+
+fn copy_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else {
+        std::fs::copy(src, dst)?;
+    }
+    Ok(())
 }

@@ -23,6 +23,9 @@ export const EXT_ICONS = {
   toml:  { label: 'TM',  bg: '#d19a6622', color: '#d19a66' },
   md:    { label: 'MD',  bg: '#abb2bf22', color: '#abb2bf' },
   sh:    { label: '$',   bg: '#98c37922', color: '#98c379' },
+  bash:  { label: '$',   bg: '#98c37922', color: '#98c379' },
+  zsh:   { label: '$',   bg: '#98c37922', color: '#98c379' },
+  fish:  { label: '$',   bg: '#98c37922', color: '#98c379' },
   sql:   { label: 'DB',  bg: '#56b6c222', color: '#56b6c2' },
   xml:   { label: '<>',  bg: '#d19a6622', color: '#d19a66' },
   txt:   { label: 'TXT', bg: '#abb2bf22', color: '#abb2bf' },
@@ -33,6 +36,8 @@ export function fileIcon(name) {
   const lower = name.toLowerCase();
   if (lower === 'dockerfile' || lower.startsWith('dockerfile.')) return { label: 'DK', bg: '#61afef22', color: '#61afef' };
   if (lower === '.env' || lower.startsWith('.env')) return { label: 'ENV', bg: '#98c37922', color: '#98c379' };
+  const SHELL_NAMES = new Set(['.bashrc','.bash_profile','.bash_aliases','.zshrc','.zprofile','.profile','.fishrc','bashrc','zshrc','profile']);
+  if (SHELL_NAMES.has(lower)) return { label: '$', bg: '#98c37922', color: '#98c379' };
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
   return EXT_ICONS[ext] ?? null;
 }

@@ -52,7 +52,7 @@
   async function refreshOpenDirs(nodes) {
     for (const node of nodes) {
       if (node.is_dir && node.open) {
-        try { node.children = await fetchDir(node.path); } catch {}
+        try { node.children = await fetchDir(node.path); node.loaded = true; } catch {}
         if (node.children?.length) await refreshOpenDirs(node.children);
       }
     }
@@ -95,7 +95,7 @@
   // ── Path editing ──────────────────────────────────────────────────────────
   let editingPath = $state(false);
   let pathInput = $state("");
-  let committing = false; // prevent onblur from cancelling Enter
+  let committing = false;
 
   function commitPath() {
     committing = true;
@@ -104,6 +104,113 @@
     loadRoot();
     Promise.resolve().then(() => { committing = false; });
   }
+
+  // ── CRUD ──────────────────────────────────────────────────────────────────
+  /** @type {{ x: number, y: number, node: TreeNode|null }|null} */
+  let ctxMenu = $state(null);
+  /** @type {{ parentPath: string|null, type: 'file'|'folder', name: string }|null} */
+  let creating = $state(null);
+  /** @type {{ node: TreeNode, name: string }|null} */
+  let renaming = $state(null);
+  /** @type {TreeNode|null} */
+  let deleting = $state(null);
+  let crudError = $state("");
+  /** @type {{ action: 'cut'|'copy', path: string, name: string }|null} */
+  let clipboard = $state(null);
+
+  // isCommittingRef pattern — prevents onblur from cancelling when Enter fires
+  let isCommitting = false;
+
+  /** @param {HTMLElement} el */
+  function focusInput(el) { el.focus(); el.select(); }
+
+  function fileActionUrl(path) {
+    const tail = path.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
+    return `${basePath}/api/files/${tail}`;
+  }
+
+  function closeCtx() { ctxMenu = null; }
+
+  /** @param {MouseEvent} e @param {TreeNode|null} node */
+  function onContextMenu(e, node) {
+    e.preventDefault(); e.stopPropagation();
+    ctxMenu = { x: Math.min(e.clientX, window.innerWidth - 210), y: Math.min(e.clientY, window.innerHeight - 240), node };
+  }
+
+  async function crudCreate() {
+    if (!creating || !creating.name.trim()) { creating = null; return; }
+    isCommitting = true;
+    const name = creating.name.trim();
+    const path = creating.parentPath ? `${creating.parentPath}/${name}` : `${root}/${name}`;    try {
+      const res = await fetch(`${basePath}/api/files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, type: creating.type }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      creating = null;
+      await loadRoot();
+    } catch(e) { crudError = String(e); creating = null; }
+    finally { isCommitting = false; }
+  }
+
+  async function crudRename() {
+    if (!renaming || !renaming.name.trim()) { renaming = null; return; }
+    isCommitting = true;
+    const oldPath = renaming.node.path;
+    const dir = oldPath.substring(0, oldPath.lastIndexOf('/'));
+    const newPath = `${dir}/${renaming.name.trim()}`;
+    try {
+      const res = await fetch(fileActionUrl(oldPath), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newPath }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      renaming = null;
+      await loadRoot();
+    } catch(e) { crudError = String(e); renaming = null; }
+    finally { isCommitting = false; }
+  }
+
+  async function crudDelete() {
+    if (!deleting) return;
+    try {
+      const res = await fetch(fileActionUrl(deleting.path), { method: "DELETE" });
+      if (!res.ok) throw new Error(await res.text());
+      deleting = null;
+      await loadRoot();
+    } catch(e) { crudError = String(e); deleting = null; }
+  }
+
+  async function crudPaste(targetNode) {
+    if (!clipboard) return;
+    const destDir = targetNode?.is_dir ? targetNode.path : (targetNode ? targetNode.path.substring(0, targetNode.path.lastIndexOf('/')) : root);
+    const destPath = `${destDir}/${clipboard.name}`;
+    try {
+      if (clipboard.action === 'cut') {
+        const res = await fetch(fileActionUrl(clipboard.path), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ newPath: destPath }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        clipboard = null;
+      } else {
+        // copy via dedicated endpoint
+        const res = await fetch(`${basePath}/api/files/copy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ src: clipboard.path, dst: destPath }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+      }
+      await loadRoot();
+    } catch(e) { crudError = String(e); }
+    closeCtx();
+  }
+
+  function onDocClick() { if (ctxMenu) closeCtx(); }
 
   onMount(async () => {
     try {
@@ -117,17 +224,14 @@
   });
 </script>
 
+<svelte:document onclick={onDocClick} />
+
 <div class="fm-sidebar">
-  <!-- Header: root folder name -->
+  <!-- Header -->
   <div class="fm-sidebar-header">
     {#if editingPath}
-      <input
-        class="fm-path-input"
-        bind:value={pathInput}
-        onkeydown={(e) => {
-          if (e.key === "Enter") { commitPath(); }
-          if (e.key === "Escape") { editingPath = false; }
-        }}
+      <input class="fm-path-input" bind:value={pathInput}
+        onkeydown={(e) => { if (e.key === "Enter") commitPath(); if (e.key === "Escape") editingPath = false; }}
         onblur={() => { if (!committing) editingPath = false; }}
         use:focus
       />
@@ -142,6 +246,12 @@
         </svg>
       </span>
     {/if}
+    <button class="fm-icon-btn" title="New File" onclick={(e) => { e.stopPropagation(); creating = { parentPath: null, type: 'file', name: '' }; }}>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 1.5v3h3L9.5 1.5zM3 2a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6h-4V2H3zm5 6.5a.5.5 0 0 1 .5.5v1.5H10a.5.5 0 0 1 0 1H8.5V13a.5.5 0 0 1-1 0v-1.5H6a.5.5 0 0 1 0-1h1.5V9a.5.5 0 0 1 .5-.5z"/></svg>
+    </button>
+    <button class="fm-icon-btn" title="New Folder" onclick={(e) => { e.stopPropagation(); creating = { parentPath: null, type: 'folder', name: '' }; }}>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zm7.5 5a.5.5 0 0 0-1 0V10H6a.5.5 0 0 0 0 1h1.5v1.5a.5.5 0 0 0 1 0V11H10a.5.5 0 0 0 0-1H8.5V8.5z"/></svg>
+    </button>
     <button class="fm-icon-btn" onclick={loadRoot} title="Refresh">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
         <path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/>
@@ -149,29 +259,114 @@
     </button>
   </div>
 
-  {#if error}
+  {#if crudError}
+    <div class="fm-error" role="button" tabindex="-1" onclick={() => crudError = ""} onkeydown={(e) => e.key === 'Enter' && (crudError = "")}>{crudError}</div>
+  {:else if error}
     <div class="fm-error">{error}</div>
-  {:else}
-    <div class="fm-tree-body">
-      {#each tree as node}
-        {@render NodeRow({ node, depth: 0 })}
-      {/each}
-    </div>
   {/if}
+
+  <div class="fm-tree-body" role="tree" tabindex="0" oncontextmenu={(e) => onContextMenu(e, null)}>
+    {#each tree as node}
+      {@render NodeRow({ node, depth: 0 })}
+    {/each}
+    {#if creating && creating.parentPath === null}
+      <div class="fm-node" style:padding-left="4px">
+        <span class="fm-chevron-spacer"></span>
+        <input class="fm-inline-input" placeholder={creating.type === 'file' ? 'filename' : 'foldername'}
+          bind:value={creating.name}
+          use:focusInput
+          onkeydown={(e) => { if (e.key === 'Enter') { isCommitting = true; crudCreate(); } if (e.key === 'Escape') creating = null; }}
+          onblur={() => { if (!isCommitting) creating = null; }}
+        />
+      </div>
+    {/if}
+  </div>
 </div>
+
+<!-- Context menu -->
+{#if ctxMenu}
+  <div class="fm-ctx" style:left="{ctxMenu.x}px" style:top="{ctxMenu.y}px" role="menu" tabindex="-1"
+    onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && closeCtx()}>
+    <button class="fm-ctx-item" role="menuitem"
+      onclick={() => { creating = { parentPath: ctxMenu.node?.is_dir ? ctxMenu.node.path : null, type: 'file', name: '' }; closeCtx(); }}>
+      New File
+    </button>
+    <button class="fm-ctx-item" role="menuitem"
+      onclick={() => { creating = { parentPath: ctxMenu.node?.is_dir ? ctxMenu.node.path : null, type: 'folder', name: '' }; closeCtx(); }}>
+      New Folder
+    </button>
+    {#if ctxMenu.node}
+      <div class="fm-ctx-sep"></div>
+      <button class="fm-ctx-item" role="menuitem"
+        onclick={() => { renaming = { node: ctxMenu.node, name: ctxMenu.node.name }; closeCtx(); }}>
+        Rename
+      </button>
+      <button class="fm-ctx-item fm-ctx-danger" role="menuitem"
+        onclick={() => { deleting = ctxMenu.node; closeCtx(); }}>
+        Delete
+      </button>
+      <div class="fm-ctx-sep"></div>
+      <button class="fm-ctx-item" role="menuitem"
+        onclick={() => { clipboard = { action: 'cut', path: ctxMenu.node.path, name: ctxMenu.node.name }; closeCtx(); }}>
+        Cut
+      </button>
+      <button class="fm-ctx-item" role="menuitem"
+        onclick={() => { clipboard = { action: 'copy', path: ctxMenu.node.path, name: ctxMenu.node.name }; closeCtx(); }}>
+        Copy
+      </button>
+      <div class="fm-ctx-sep"></div>
+      <button class="fm-ctx-item" role="menuitem"
+        onclick={() => { navigator.clipboard.writeText(ctxMenu.node.path); closeCtx(); }}>
+        Copy Path
+      </button>
+      <div class="fm-ctx-sep"></div>
+    {/if}
+    <button class="fm-ctx-item" class:fm-ctx-disabled={!clipboard} role="menuitem"
+      onclick={() => { if (clipboard) crudPaste(ctxMenu.node); }}>
+      Paste
+    </button>
+  </div>
+{/if}
+
+<!-- Delete confirm -->
+{#if deleting}
+  <div class="fm-modal-backdrop" role="button" tabindex="-1" onclick={() => deleting = null} onkeydown={(e) => e.key === 'Escape' && (deleting = null)}>
+    <div class="fm-modal" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
+      <div class="fm-modal-title">Delete "{deleting.name}"?</div>
+      <div class="fm-modal-body">This cannot be undone.</div>
+      <div class="fm-modal-actions">
+        <button class="fm-btn" onclick={() => deleting = null}>Cancel</button>
+        <button class="fm-btn fm-btn-danger" onclick={crudDelete}>Delete</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#snippet NodeRow({ node, depth })}
   {@const icon = node.is_dir ? null : fileIcon(node.name)}
   {@const isActive = activeTab === node.path}
+  {@const isCtxSelected = ctxMenu?.node?.path === node.path}
+  {@const isRenaming = renaming?.node.path === node.path}
+  {@const isCut = clipboard?.action === 'cut' && clipboard.path === node.path}
   <div
     class="fm-node"
     class:is-active={isActive}
+    class:is-ctx={isCtxSelected && !isActive}
     style:padding-left="{depth * 16 + 4}px"
+    style:opacity={isCut ? 0.4 : 1}
     role="button"
     tabindex="0"
     onclick={() => handleClick(node)}
+    oncontextmenu={(e) => onContextMenu(e, node)}
     onkeydown={(e) => e.key === "Enter" && handleClick(node)}
   >
+    <!-- Active file left border -->
+    {#if isActive}
+      <span class="fm-active-border"></span>
+    {:else if isCtxSelected}
+      <span class="fm-ctx-border"></span>
+    {/if}
+
     <!-- Indent guide lines -->
     {#each { length: depth } as _, i}
       <span class="fm-indent-guide" style:left="{i * 16 + 12}px"></span>
@@ -209,12 +404,38 @@
       {/if}
     {/if}
 
-    <span class="fm-node-name" class:fm-node-name-active={isActive}>{node.name}</span>
+    <span class="fm-node-name" class:fm-node-name-active={isActive}>
+      {#if isRenaming}
+        <input class="fm-inline-input" bind:value={renaming.name}
+          use:focusInput
+          onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') { isCommitting = true; crudRename(); } if (e.key === 'Escape') renaming = null; }}
+          onblur={() => { if (!isCommitting) renaming = null; }}
+          onclick={(e) => e.stopPropagation()}
+        />
+      {:else}
+        {node.name}
+      {/if}
+    </span>
   </div>
 
-  {#if node.is_dir && node.open && node.children}
-    {#each node.children as child}
-      {@render NodeRow({ node: child, depth: depth + 1 })}
-    {/each}
+  {#if node.is_dir && node.open}
+    {#if node.children?.length}
+      {#each node.children as child}
+        {@render NodeRow({ node: child, depth: depth + 1 })}
+      {/each}
+    {:else if node.loaded}
+      <div class="fm-empty-folder" style:padding-left="{(depth + 1) * 16 + 20}px">Empty folder</div>
+    {/if}
+    {#if creating && creating.parentPath === node.path}
+      <div class="fm-node" style:padding-left="{(depth + 1) * 16 + 4}px">
+        <span class="fm-chevron-spacer"></span>
+        <input class="fm-inline-input" placeholder={creating.type === 'file' ? 'filename' : 'foldername'}
+          bind:value={creating.name}
+          use:focusInput
+          onkeydown={(e) => { if (e.key === 'Enter') { isCommitting = true; crudCreate(); } if (e.key === 'Escape') creating = null; }}
+          onblur={() => { if (!isCommitting) creating = null; }}
+        />
+      </div>
+    {/if}
   {/if}
 {/snippet}

@@ -343,7 +343,7 @@ async fn main() {
         .route(&format!("{}/api/config",        bp), get(move || async move { serve_config(config_json).await }))
         .route(&format!("{}/api/exec",          bp), post(serve_exec))
         .nest(&format!("{}/api/tools",          bp), rest::router())
-        .route(&format!("{}/api/files",         bp), get(rest::list_files_handler))
+        .nest(&format!("{}/api/files",          bp), rest::files_router())
 
         // WebSocket (industry standard convention)
         .route(&format!("{}/ws",                bp), get(ws::ws_handler))

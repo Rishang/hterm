@@ -57,8 +57,29 @@
   // ── Active tab ────────────────────────────────────────────────────────────
   let activeTab = $state("t1");
   let showSidebar = $state(false);
+  let sidebarWidth = $state(220);
 
   function isTermTab(id) { return termTabs.includes(id); }
+
+  // ── Sidebar resize ────────────────────────────────────────────────────────
+  function onResizeStart(e) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    function onMove(e) {
+      sidebarWidth = Math.min(600, Math.max(120, startW + e.clientX - startX));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   // ── Tab drag-to-reorder ───────────────────────────────────────────────────
   let dragSrcId = null;
@@ -115,13 +136,11 @@
       onclick={() => { showSidebar = !showSidebar; }}
       onkeydown={(e) => e.key === "Enter" && (showSidebar = !showSidebar)}
       title="Toggle file explorer">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <!-- folder body -->
-        <path d="M2 8.5C2 7.4 2.9 6.5 4 6.5H9l1.5 1.5H20C21.1 8 22 8.9 22 10v8c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V8.5z"/>
-        <!-- document sticking out -->
-        <path d="M8 6.5V5c0-.6.4-1 1-1h5l2 2v4"/>
-        <line x1="10" y1="10" x2="15" y2="10"/>
-        <line x1="10" y1="12.5" x2="13" y2="12.5"/>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3.5 7.5V6a2 2 0 0 1 2-2h4.2l2 2H18a2 2 0 0 1 2 2v1.5"/>
+        <path d="M3 9.5h18l-1.2 8.2a2 2 0 0 1-2 1.8H6.2a2 2 0 0 1-2-1.8L3 9.5z"/>
+        <path d="M7.5 13h5"/>
+        <path d="M7.5 16h8"/>
       </svg>
     </div>
 
@@ -195,7 +214,11 @@
   <div id="app-body">
     <!-- Sidebar -->
     {#if showSidebar}
-      <FileManager bind:fileTabs {activeTab} {openFileTab} />
+      <div class="fm-sidebar-wrap" style:width="{sidebarWidth}px">
+        <FileManager bind:fileTabs {activeTab} {openFileTab} />
+      </div>
+      <button class="fm-resize-handle" type="button" aria-label="Resize file explorer"
+        onmousedown={onResizeStart}></button>
     {/if}
 
     <!-- Terminal tabs (all mounted, hidden when inactive so state is preserved) -->
