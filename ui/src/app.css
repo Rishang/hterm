@@ -1,95 +1,269 @@
 /* ============================================================
-   hterm — terminal.css
-   Default theme: Catppuccin Mocha
+   hterm — app.css  (Atom One Dark Pro)
    ============================================================ */
 
 :root {
-  --bg-primary: #1e1e2e;
-  --bg-surface: #181825;
-  --text-primary: #cdd6f4;
-  --text-subtle: #a6adc8;
-  --accent: #89b4fa;
-  --border: #313244;
-  --status-connected: #a6e3a1;
-  --status-disconnected: #f38ba8;
-  --status-connecting: #f9e2af;
+  --bg-primary:           #282c34;
+  --bg-surface:           #21252b;
+  --text-primary:         #abb2bf;
+  --text-subtle:          #5c6370;
+  --accent:               #61afef;
+  --accent-dim:           rgba(97,175,239,0.10);
+  --border:               #181a1f;
+  --status-connected:     #98c379;
+  --status-disconnected:  #e06c75;
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-  border: none;
-}
+* { margin: 0; padding: 0; box-sizing: border-box; border: none; }
 
-html,
-body {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: transparent;
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-}
-
-#terminal-container {
-  position: fixed;
-  inset: 0;
-  background: transparent;
-  overflow: hidden;
-  display: flex;
-}
-
-#terminal {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* ---- xterm.js overrides ---- */
-.xterm {
-  width: 100% !important;
-  height: 100% !important;
+html, body {
+  width: 100%; height: 100%;
   overflow: hidden;
   background: var(--bg-primary);
+  font-family: 'SF Pro Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
 }
 
-.xterm-rows {
-  background: var(--bg-primary);
-}
+/* ── App shell ─────────────────────────────────────────────── */
 
-.xterm-scrollable-element {
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
-}
+#app-root { position: fixed; inset: 0; display: flex; flex-direction: column; }
 
-.xterm-screen {
-  overflow: hidden;
-  margin: 1px 2px;
-}
+/* ── Tab bar ───────────────────────────────────────────────── */
 
+#tab-bar {
+  display: flex; align-items: stretch;
+  background: #21252b;
+  border-bottom: 1px solid #181a1f;
+  height: 32px; flex-shrink: 0;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+}
+#tab-bar::-webkit-scrollbar { display: none; }
+
+.tab {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 10px;
+  background: #21252b; color: #5c6370;
+  font-size: 12px; font-family: 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  cursor: pointer; white-space: nowrap;
+  border-right: 1px solid #181a1f !important;
+  border-bottom: 2px solid transparent !important;
+  transition: color 0.12s;
+  flex-shrink: 0;
+}
+.tab:hover { color: #abb2bf; background: #2c313c; }
+.tab.active { color: #abb2bf; border-bottom-color: #61afef !important; background: #282c34; }
+.tab.tab-modified .tab-name::after { content: "●"; font-size: 8px; margin-left: 4px; color: #e5c07b; }
+
+.tab-icon { font-size: 13px; }
+.tab-icon-svg { flex-shrink: 0; opacity: 0.7; }
+.tab:hover .tab-icon-svg, .tab.active .tab-icon-svg { opacity: 1; }
+.tab-file-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 15px; min-width: 15px; padding: 0 3px;
+  border-radius: 3px; font-size: 8px; font-weight: 700; line-height: 1;
+  flex-shrink: 0; font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.tab-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+
+.tab-close {
+  display: flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px;
+  color: var(--text-subtle); border-radius: 3px;
+  cursor: pointer;
+  opacity: 0; transition: opacity 0.1s;
+}
+.tab:hover .tab-close { opacity: 1; }
+.tab-close:hover { color: var(--status-disconnected); background: rgba(224,108,117,0.15); }
+
+/* ── Body ──────────────────────────────────────────────────── */
+
+#app-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+
+/* ── Terminal ──────────────────────────────────────────────── */
+
+#terminal-container { flex: 1; min-width: 0; display: flex; overflow: hidden; }
+#terminal-container.hidden { display: none; }
+#terminal { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+
+.term-wrap { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+.term-wrap.hidden { display: none; }
+.xterm { width: 100% !important; height: 100% !important; overflow: hidden; background: #282c34; }
+.xterm-rows { background: #282c34; }
+.xterm-scrollable-element { overflow-x: hidden !important; overflow-y: auto !important; }
+.xterm-screen { overflow: hidden; margin: 1px 2px; }
 .xterm-viewport {
   background-color: transparent !important;
-  scrollbar-color: var(--border) var(--bg-primary);
-  scrollbar-width: thin;
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
+  scrollbar-color: var(--border) var(--bg-primary); scrollbar-width: thin;
+  overflow-x: hidden !important; overflow-y: auto !important;
+}
+.xterm-viewport::-webkit-scrollbar { width: 2px; height: 0; }
+.xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.xterm-viewport::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); }
+
+/* ── File view (sidebar + content) ────────────────────────── */
+
+
+/* Sidebar */
+.fm-sidebar {
+  width: 220px; min-width: 140px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
 }
 
-.xterm-viewport::-webkit-scrollbar {
-  width: 2px;
-  height: 0;
+.fm-sidebar-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 8px 0 12px;
+  height: 35px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.fm-sidebar-title {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-subtle);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer; flex: 1;
+}
+.fm-sidebar-title:hover { color: var(--accent); }
+.fm-path-input {
+  flex: 1; min-width: 0;
+  background: #2c313c; color: var(--text-primary);
+  font-size: 11px; padding: 2px 6px;
+  border: 1px solid var(--accent) !important; border-radius: 3px; outline: none;
+}
+.fm-icon-btn {
+  background: none; color: var(--text-subtle);
+  cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1; border-radius: 3px;
+  flex-shrink: 0;
+}
+.fm-icon-btn:hover { color: var(--accent); }
+
+.fm-tree-body {
+  flex: 1; overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  padding: 4px 0;
 }
 
-.xterm-viewport::-webkit-scrollbar-track {
-  background: transparent;
+/* Tree node row */
+.fm-node {
+  position: relative;
+  display: flex; align-items: center; gap: 4px;
+  height: 22px;
+  cursor: pointer; user-select: none;
+  font-size: 13px; color: #abb2bf;
+  font-family: 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  white-space: nowrap; overflow: hidden;
+  padding-right: 8px;
+}
+.fm-node:hover { background: #2c313c; }
+.fm-node.is-active { background: #2c313c; }
+.fm-node.is-active::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 2px; background: #61afef;
 }
 
-.xterm-viewport::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 2px;
+/* Indent guide lines */
+.fm-indent-guide {
+  position: absolute; top: 0; bottom: 0;
+  width: 1px; background: #2c313c;
+  pointer-events: none;
 }
 
-.xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: var(--text-subtle);
+/* Chevron */
+.fm-chevron {
+  display: flex; align-items: center; justify-content: center;
+  color: #5c6370; flex-shrink: 0; width: 14px;
 }
+.fm-chevron-spacer { width: 14px; flex-shrink: 0; }
+
+/* Folder SVG icon */
+.fm-folder-icon { display: flex; align-items: center; flex-shrink: 0; }
+
+/* Extension badge (colored label like JS, TS, PY) */
+.fm-ext-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 16px; min-width: 16px; padding: 0 3px;
+  border-radius: 3px; font-size: 8px; font-weight: 700; line-height: 1;
+  flex-shrink: 0; font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+/* Generic file SVG icon */
+.fm-file-icon-svg { flex-shrink: 0; display: block; }
+
+.fm-node-name { overflow: hidden; text-overflow: ellipsis; flex: 1; color: #abb2bf; }
+.fm-node-name-active { color: #e6e6e6; }
+
+/* File content area */
+.tab-sidebar-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 100%; flex-shrink: 0;
+  background: none; color: var(--text-subtle);
+  font-size: 16px; cursor: pointer;
+  border-right: 1px solid #181a1f !important;
+  transition: color 0.12s;
+}
+.tab-sidebar-btn:hover, .tab-sidebar-btn.active { color: var(--accent); }
+
+.tab-new-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 100%; flex-shrink: 0;
+  background: none; color: var(--text-subtle);
+  font-size: 20px; cursor: pointer;
+  transition: color 0.12s;
+}
+.tab-new-btn:hover { color: var(--accent); }
+
+#file-content {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.fc-topbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px; height: 36px; flex-shrink: 0;
+  background: var(--bg-surface); border-bottom: 1px solid var(--border);
+}
+
+.fc-filepath {
+  flex: 1; font-size: 11px; color: var(--text-subtle);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.fm-save-btn {
+  background: var(--accent); color: var(--bg-primary);
+  font-size: 12px; padding: 3px 12px; border-radius: 4px; cursor: pointer; font-weight: 600;
+}
+.fm-save-btn:disabled { opacity: 0.5; cursor: default; }
+.fm-saved { font-size: 12px; color: var(--status-connected); }
+.fm-save-err { font-size: 12px; color: var(--status-disconnected); }
+
+/* Breadcrumb */
+.fm-breadcrumb {
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 12px; flex-shrink: 0;
+  background: var(--bg-surface); border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--text-subtle); overflow: hidden;
+}
+.fm-bc-sep { color: var(--border); }
+.fm-bc-part { color: var(--text-subtle); }
+.fm-bc-last { color: var(--text-primary); }
+
+/* Binary / empty / error */
+.fm-binary {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px;
+  color: var(--text-subtle); font-size: 13px;
+}
+.fm-binary-icon { font-size: 32px; opacity: 0.4; }
+.fm-binary-path { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-subtle); opacity: 0.7; }
+
+.fm-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--text-subtle); font-size: 13px;
+}
+.fm-loading {
+  padding: 12px; color: var(--text-subtle); font-size: 12px; text-align: center;
+}
+.fm-error { padding: 8px 12px; color: var(--status-disconnected); font-size: 12px; }
+.fm-error-main { padding: 16px; }
