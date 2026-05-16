@@ -131,6 +131,20 @@
 
   function closeCtx() { ctxMenu = null; }
 
+  function parentPath(path) {
+    const idx = path.lastIndexOf('/');
+    return idx <= 0 ? "/" : path.substring(0, idx);
+  }
+
+  function joinPath(dir, name) {
+    return `${dir.replace(/\/+$/, '')}/${name}`.replace(/^\/?/, '/');
+  }
+
+  function isDescendantPath(path, maybeParent) {
+    const parent = maybeParent.replace(/\/+$/, '');
+    return path === parent || path.startsWith(`${parent}/`);
+  }
+
   /** @param {MouseEvent} e @param {TreeNode|null} node */
   function onContextMenu(e, node) {
     e.preventDefault(); e.stopPropagation();
@@ -185,8 +199,8 @@
 
   async function crudPaste(targetNode) {
     if (!clipboard) return;
-    const destDir = targetNode?.is_dir ? targetNode.path : (targetNode ? targetNode.path.substring(0, targetNode.path.lastIndexOf('/')) : root);
-    const destPath = `${destDir}/${clipboard.name}`;
+    const destDir = targetNode?.is_dir ? targetNode.path : (targetNode ? parentPath(targetNode.path) : root);
+    const destPath = joinPath(destDir, clipboard.name);
     try {
       if (clipboard.action === 'cut') {
         const res = await fetch(fileActionUrl(clipboard.path), {
@@ -208,6 +222,107 @@
       await loadRoot();
     } catch(e) { crudError = String(e); }
     closeCtx();
+  }
+
+  // ── Drag move ─────────────────────────────────────────────────────────────
+  /** @type {TreeNode|null} */
+  let draggingNode = $state(null);
+  /** @type {string|null} */
+  let dragTargetPath = $state(null);
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let dragOpenTimer = null;
+
+  function clearDragOpenTimer() {
+    if (dragOpenTimer) clearTimeout(dragOpenTimer);
+    dragOpenTimer = null;
+  }
+
+  function dropDirFor(targetNode) {
+    return targetNode?.is_dir ? targetNode.path : (targetNode ? parentPath(targetNode.path) : root);
+  }
+
+  function canMoveTo(sourceNode, targetNode) {
+    if (!sourceNode) return false;
+    const destDir = dropDirFor(targetNode);
+    const destPath = joinPath(destDir, sourceNode.name);
+    if (destPath === sourceNode.path) return false;
+    if (sourceNode.is_dir && isDescendantPath(destDir, sourceNode.path)) return false;
+    return true;
+  }
+
+  async function moveNode(sourceNode, targetNode) {
+    if (!sourceNode || !canMoveTo(sourceNode, targetNode)) return;
+    const destPath = joinPath(dropDirFor(targetNode), sourceNode.name);
+    try {
+      const res = await fetch(fileActionUrl(sourceNode.path), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newPath: destPath }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadRoot();
+    } catch (e) { crudError = String(e); }
+  }
+
+  function onNodeDragStart(e, node) {
+    if (renaming?.node.path === node.path) { e.preventDefault(); return; }
+    draggingNode = node;
+    dragTargetPath = null;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", node.path);
+  }
+
+  function onNodeDragOver(e, node) {
+    if (!draggingNode || draggingNode.path === node.path) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = canMoveTo(draggingNode, node) ? "move" : "none";
+    if (dragTargetPath !== node.path) clearDragOpenTimer();
+    dragTargetPath = node.path;
+    if (node.is_dir && !node.open && canMoveTo(draggingNode, node) && !dragOpenTimer) {
+      dragOpenTimer = setTimeout(async () => {
+        dragOpenTimer = null;
+        if (dragTargetPath === node.path && draggingNode) await toggleDir(node);
+      }, 550);
+    }
+  }
+
+  function onNodeDragLeave(node) {
+    if (dragTargetPath === node.path) dragTargetPath = null;
+    clearDragOpenTimer();
+  }
+
+  async function onNodeDrop(e, node) {
+    e.preventDefault();
+    e.stopPropagation();
+    const source = draggingNode;
+    draggingNode = null;
+    dragTargetPath = null;
+    clearDragOpenTimer();
+    await moveNode(source, node);
+  }
+
+  function onTreeDragOver(e) {
+    if (!draggingNode) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = canMoveTo(draggingNode, null) ? "move" : "none";
+    dragTargetPath = "__root__";
+  }
+
+  async function onTreeDrop(e) {
+    if (!draggingNode) return;
+    e.preventDefault();
+    const source = draggingNode;
+    draggingNode = null;
+    dragTargetPath = null;
+    clearDragOpenTimer();
+    await moveNode(source, null);
+  }
+
+  function onNodeDragEnd() {
+    draggingNode = null;
+    dragTargetPath = null;
+    clearDragOpenTimer();
   }
 
   function onDocClick() { if (ctxMenu) closeCtx(); }
@@ -265,7 +380,16 @@
     <div class="fm-error">{error}</div>
   {/if}
 
-  <div class="fm-tree-body" role="tree" tabindex="0" oncontextmenu={(e) => onContextMenu(e, null)}>
+  <div
+    class="fm-tree-body"
+    class:is-drop-target={dragTargetPath === "__root__"}
+    role="tree"
+    tabindex="0"
+    oncontextmenu={(e) => onContextMenu(e, null)}
+    ondragover={onTreeDragOver}
+    ondragleave={() => { if (dragTargetPath === "__root__") dragTargetPath = null; }}
+    ondrop={onTreeDrop}
+  >
     {#each tree as node}
       {@render NodeRow({ node, depth: 0 })}
     {/each}
@@ -348,17 +472,29 @@
   {@const isCtxSelected = ctxMenu?.node?.path === node.path}
   {@const isRenaming = renaming?.node.path === node.path}
   {@const isCut = clipboard?.action === 'cut' && clipboard.path === node.path}
+  {@const isDragging = draggingNode?.path === node.path}
+  {@const isDropTarget = dragTargetPath === node.path && draggingNode?.path !== node.path}
+  {@const isInvalidDrop = isDropTarget && draggingNode && !canMoveTo(draggingNode, node)}
   <div
     class="fm-node"
     class:is-active={isActive}
     class:is-ctx={isCtxSelected && !isActive}
+    class:is-dragging={isDragging}
+    class:is-drop-target={isDropTarget && !isInvalidDrop}
+    class:is-drop-invalid={isInvalidDrop}
     style:padding-left="{depth * 16 + 4}px"
     style:opacity={isCut ? 0.4 : 1}
     role="button"
     tabindex="0"
+    draggable={!isRenaming}
     onclick={() => handleClick(node)}
     oncontextmenu={(e) => onContextMenu(e, node)}
     onkeydown={(e) => e.key === "Enter" && handleClick(node)}
+    ondragstart={(e) => onNodeDragStart(e, node)}
+    ondragover={(e) => onNodeDragOver(e, node)}
+    ondragleave={() => onNodeDragLeave(node)}
+    ondrop={(e) => onNodeDrop(e, node)}
+    ondragend={onNodeDragEnd}
   >
     <!-- Active file left border -->
     {#if isActive}
