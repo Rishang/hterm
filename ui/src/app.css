@@ -133,7 +133,7 @@ html, body {
 }
 .fm-icon-btn {
   background: none; color: var(--text-subtle);
-  cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1; border-radius: 3px;
+  cursor: pointer; padding: 0 2px; line-height: 1; border-radius: 3px;
   flex-shrink: 0;
 }
 .fm-icon-btn:hover { color: var(--accent); }
@@ -219,17 +219,6 @@ html, body {
   background: var(--bg-primary);
 }
 
-.fc-topbar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 0 12px; height: 36px; flex-shrink: 0;
-  background: var(--bg-surface); border-bottom: 1px solid var(--border);
-}
-
-.fc-filepath {
-  flex: 1; font-size: 11px; color: var(--text-subtle);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
 .fm-save-btn {
   background: var(--accent); color: var(--bg-primary);
   font-size: 12px; padding: 3px 12px; border-radius: 4px; cursor: pointer; font-weight: 600;
@@ -267,3 +256,48 @@ html, body {
 }
 .fm-error { padding: 8px 12px; color: var(--status-disconnected); font-size: 12px; }
 .fm-error-main { padding: 16px; }
+
+/* ── Custom search panel (VS Code floating style) ──────────────────────────── */
+.cm-panels-bottom {
+  position: absolute !important;
+  top: 0 !important; right: 0 !important;
+  background: transparent !important; border: none !important;
+  z-index: 20 !important; width: fit-content !important;
+}
+.csb {
+  display: inline-flex; align-items: stretch; gap: 0;
+  background: #252a32; border: 1px solid #454c55; border-top: none;
+  border-radius: 0 0 0 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4); padding: 3px 4px 3px 0;
+  font-family: 'SF Pro Text','Segoe UI',system-ui,sans-serif;
+}
+
+.csb-expand {
+  background: none; border: none; color: #5c6370; cursor: pointer;
+  font-size: 13px; width: 22px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 3px; transition: transform 0.15s; align-self: flex-start; margin-top: 2px;
+}
+.csb-expand:hover { color: #abb2bf; background: #2c313c; }
+.csb-inner { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.csb-row { display: flex; align-items: center; gap: 2px; }
+.csb-input {
+  width: 180px;
+  background: transparent; color: #abb2bf;
+  border: 1px solid transparent; border-radius: 2px;
+  padding: 2px 6px; font-size: 13px;
+  font-family: inherit; outline: none; height: 25px;
+}
+.csb-input:focus { border-color: #61afef; background: #1e2227; }
+.csb-input::placeholder { color: #6b737d; }
+.csb-count { font-size: 11px; color: #6b737d; padding: 0 6px; white-space: nowrap; flex-shrink: 0; }
+.csb-toggle, .csb-btn, .csb-close {
+  background: none; border: 1px solid transparent; border-radius: 3px;
+  color: #6b737d; cursor: pointer; font-size: 11px; font-weight: 700;
+  height: 22px; padding: 0 5px; white-space: nowrap; line-height: 1; flex-shrink: 0;
+}
+.csb-toggle:hover, .csb-btn:hover { color: #abb2bf; background: #2c313c; }
+.csb-on { color: #61afef !important; background: rgba(97,175,239,0.15) !important; border-color: rgba(97,175,239,0.3) !important; }
+.csb-close { font-size: 14px; padding: 0 4px; }
+.csb-close:hover { color: #e06c75; background: rgba(224,108,117,0.12); }
+.csb-replace-row .csb-btn { font-size: 10px; }

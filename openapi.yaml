@@ -414,7 +414,43 @@ paths:
         '404':
           description: Session not found
 
-  /openapi.json:
+  /api/files:
+    get:
+      summary: List directory contents
+      description: Returns files and directories at the given path, sorted dirs-first. Hidden files (dotfiles) are excluded.
+      tags:
+        - terminal
+      parameters:
+        - name: path
+          in: query
+          description: Directory path to list (default: /)
+          schema:
+            type: string
+            example: "/home/user/projects"
+      responses:
+        '200':
+          description: Directory entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileEntry'
+              example:
+                - name: "src"
+                  path: "/home/user/projects/src"
+                  is_dir: true
+                - name: "main.rs"
+                  path: "/home/user/projects/main.rs"
+                  is_dir: false
+        '400':
+          description: Path not found or not a directory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+
     get:
       summary: Get OpenAPI specification
       description: |
@@ -481,6 +517,10 @@ components:
         url_arg:
           type: boolean
           description: Allow URL query arguments
+        cwd:
+          type: string
+          description: Working directory (file manager root)
+          example: "/home/user/projects"
 
     ExecRequest:
       type: object
@@ -504,7 +544,20 @@ components:
         status:
           type: integer
           nullable: true
-          description: Exit code (always null due to SIGCHLD=SIG_IGN)
+          description: Exit code, or null if the process was killed or timed out
+
+    FileEntry:
+      type: object
+      properties:
+        name:
+          type: string
+          description: File or directory name
+        path:
+          type: string
+          description: Full path
+        is_dir:
+          type: boolean
+          description: True if directory
 
     ToolsList:
       type: object

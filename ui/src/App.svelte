@@ -60,6 +60,26 @@
 
   function isTermTab(id) { return termTabs.includes(id); }
 
+  // ── Tab drag-to-reorder ───────────────────────────────────────────────────
+  let dragSrcId = null;
+  function onDragStart(e, id) { dragSrcId = id; e.dataTransfer.effectAllowed = "move"; }
+  function onDragOver(e, id) { if (dragSrcId && dragSrcId !== id) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }
+  function onDrop(e, id) {
+    e.preventDefault();
+    if (!dragSrcId || dragSrcId === id) return;
+    const isTermSrc = termTabs.includes(dragSrcId), isTermDst = termTabs.includes(id);
+    if (isTermSrc && isTermDst) {
+      const a = termTabs.indexOf(dragSrcId), b = termTabs.indexOf(id);
+      termTabs.splice(a, 1); termTabs.splice(b, 0, dragSrcId); termTabs = termTabs;
+    } else if (!isTermSrc && !isTermDst) {
+      const a = fileTabs.findIndex(t => t.id === dragSrcId), b = fileTabs.findIndex(t => t.id === id);
+      fileTabs.splice(a, 1); fileTabs.splice(b, 0, fileTabs.splice(a, 0)[0]);
+      // re-do cleanly
+      const tabs = [...fileTabs]; const [item] = tabs.splice(a, 1); tabs.splice(b, 0, item); fileTabs = tabs;
+    }
+    dragSrcId = null;
+  }
+
   // Re-fetch file content when switching to a file tab (picks up external edits)
   // Only updates if the user has no unsaved changes
   let prevActiveTab = $state("t1");
@@ -95,10 +115,13 @@
       onclick={() => { showSidebar = !showSidebar; }}
       onkeydown={(e) => e.key === "Enter" && (showSidebar = !showSidebar)}
       title="Toggle file explorer">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <rect x="2" y="3.5" width="12" height="1.2" rx="0.6" fill="currentColor"/>
-        <rect x="2" y="7.4" width="12" height="1.2" rx="0.6" fill="currentColor"/>
-        <rect x="2" y="11.3" width="12" height="1.2" rx="0.6" fill="currentColor"/>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <!-- folder body -->
+        <path d="M2 8.5C2 7.4 2.9 6.5 4 6.5H9l1.5 1.5H20C21.1 8 22 8.9 22 10v8c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V8.5z"/>
+        <!-- document sticking out -->
+        <path d="M8 6.5V5c0-.6.4-1 1-1h5l2 2v4"/>
+        <line x1="10" y1="10" x2="15" y2="10"/>
+        <line x1="10" y1="12.5" x2="13" y2="12.5"/>
       </svg>
     </div>
 
@@ -106,6 +129,10 @@
     {#each termTabs as tid (tid)}
       <div class="tab" class:active={activeTab === tid}
         role="button" tabindex="-1"
+        draggable="true"
+        ondragstart={(e) => onDragStart(e, tid)}
+        ondragover={(e) => onDragOver(e, tid)}
+        ondrop={(e) => onDrop(e, tid)}
         onclick={() => { activeTab = tid; }}
         onkeydown={(e) => e.key === "Enter" && (activeTab = tid)}>
         <svg class="tab-icon-svg" width="13" height="13" viewBox="0 0 16 16" fill="none">
@@ -128,6 +155,10 @@
       {@const icon = fileIcon(tab.name)}
       <div class="tab" class:active={activeTab === tab.id}
         role="button" tabindex="-1"
+        draggable="true"
+        ondragstart={(e) => onDragStart(e, tab.id)}
+        ondragover={(e) => onDragOver(e, tab.id)}
+        ondrop={(e) => onDrop(e, tab.id)}
         class:tab-modified={tab.mode === "edit" && tab.editContent !== tab.content}
         onclick={() => { activeTab = tab.id; }}
         onkeydown={(e) => e.key === "Enter" && (activeTab = tab.id)}>
@@ -140,6 +171,13 @@
           </svg>
         {/if}
         <span class="tab-name">{tab.name}</span>
+        {#if tab.saveStatus === "saving"}
+          <span style="font-size:10px;opacity:0.5">↑</span>
+        {:else if tab.saveStatus === "saved"}
+          <span style="font-size:10px;color:#98c379">✓</span>
+        {:else if tab.saveStatus === "error"}
+          <span style="font-size:10px;color:#e06c75">!</span>
+        {/if}
         <span class="tab-close" role="button" tabindex="-1"
           onclick={(e) => { e.stopPropagation(); closeFileTab(tab.id); }}
           onkeydown={(e) => e.key === "Enter" && (e.stopPropagation(), closeFileTab(tab.id))}>
@@ -172,19 +210,6 @@
       {@const tab = activeFileTab()}
       {#if tab}
         <div id="file-content">
-          <div class="fc-topbar">
-            <span class="fc-filepath">{tab.path}</span>
-            {#if !tab.isBinary && !tab.error}
-              {#if tab.saveStatus === "saving"}
-                <span class="fm-saved" style="opacity:0.6">Saving…</span>
-              {:else if tab.saveStatus === "saved"}
-                <span class="fm-saved">✓ Saved</span>
-              {:else if tab.saveStatus === "error"}
-                <span class="fm-save-err">Save failed</span>
-              {/if}
-            {/if}
-          </div>
-
           {#if tab.error}
             <div class="fm-error fm-error-main">{tab.error}</div>
           {:else if tab.isBinary}

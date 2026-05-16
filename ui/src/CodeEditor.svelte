@@ -4,7 +4,9 @@
   import { EditorState } from "@codemirror/state";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from "@codemirror/language";
+  import { search, searchKeymap, findNext, findPrevious, selectMatches, getSearchQuery, setSearchQuery, SearchQuery, closeSearchPanel, replaceNext, replaceAll } from "@codemirror/search";
   import { oneDark } from "@codemirror/theme-one-dark";
+  import { showMinimap } from "@replit/codemirror-minimap";
 
   const langMap = {
     js:     () => import("@codemirror/lang-javascript").then(m => m.javascript()),
@@ -27,6 +29,11 @@
     sql:    () => import("@codemirror/lang-sql").then(m => m.sql()),
     yaml:   () => import("@codemirror/lang-yaml").then(m => m.yaml()),
     yml:    () => import("@codemirror/lang-yaml").then(m => m.yaml()),
+    go:     () => import("@codemirror/lang-go").then(m => m.go()),
+    toml:   () => Promise.all([
+                import("@codemirror/legacy-modes/mode/toml"),
+                import("@codemirror/language"),
+              ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.toml)),
   };
 
   /** @type {{ path: string, value: string, readonly?: boolean, onchange?: (v: string) => void, onsave?: () => void }} */
@@ -36,6 +43,108 @@
   let container;
   /** @type {EditorView | null} */
   let view = null;
+
+  /** @param {import("@codemirror/view").EditorView} v */
+  function createSearchPanel(v) {
+    const dom = document.createElement("div");
+    dom.className = "csb";
+    dom.setAttribute("onkeydown", ""); // prevent CM from stealing
+
+    // ── expand toggle (›) ──────────────────────────────────────────────────
+    const expandBtn = document.createElement("button");
+    expandBtn.className = "csb-expand"; expandBtn.textContent = "›"; expandBtn.title = "Toggle Replace";
+    let replaceVisible = false;
+
+    // ── find row ───────────────────────────────────────────────────────────
+    const findRow = document.createElement("div"); findRow.className = "csb-row";
+    const findInput = document.createElement("input");
+    findInput.placeholder = "Find"; findInput.className = "csb-input";
+    findInput.setAttribute("main-field", "true");
+
+    const matchCount = document.createElement("span"); matchCount.className = "csb-count";
+
+    const btnCase = mkToggle("Aa", "Match Case");
+    const btnWord = mkToggle("ab̲", "Whole Word");
+    const btnRe   = mkToggle(".*", "Use Regexp");
+    const btnPrev = mkIconBtn("↑", "Previous Match", () => findPrevious(v));
+    const btnNext = mkIconBtn("↓", "Next Match",     () => findNext(v));
+    const btnAll  = mkIconBtn("≡", "Select All",     () => selectMatches(v));
+    const btnClose= mkIconBtn("×", "Close",          () => closeSearchPanel(v));
+    btnClose.className = "csb-close";
+
+    findRow.append(findInput, matchCount, btnCase, btnWord, btnRe, btnPrev, btnNext, btnAll, btnClose);
+
+    // ── replace row ────────────────────────────────────────────────────────
+    const replaceRow = document.createElement("div"); replaceRow.className = "csb-row csb-replace-row";
+    replaceRow.style.display = "none";
+    const replaceInput = document.createElement("input");
+    replaceInput.placeholder = "Replace"; replaceInput.className = "csb-input";
+    const btnReplace    = mkIconBtn("AB→", "Replace",     () => replaceNext(v));
+    const btnReplaceAll = mkIconBtn("AB→→", "Replace All", () => replaceAll(v));
+    replaceRow.append(replaceInput, btnReplace, btnReplaceAll);
+
+    expandBtn.addEventListener("click", () => {
+      replaceVisible = !replaceVisible;
+      replaceRow.style.display = replaceVisible ? "flex" : "none";
+      expandBtn.style.transform = replaceVisible ? "rotate(90deg)" : "";
+    });
+
+    dom.append(expandBtn, Object.assign(document.createElement("div"), {
+      className: "csb-main",
+      append: function(...args) { this.append(...args); return this; }
+    }));
+    // simpler: just append directly
+    dom.innerHTML = ""; // reset
+    const inner = document.createElement("div"); inner.className = "csb-inner";
+    inner.append(findRow, replaceRow);
+    dom.append(expandBtn, inner);
+
+    function sync() {
+      const q = new SearchQuery({
+        search: findInput.value,
+        replace: replaceInput.value,
+        caseSensitive: btnCase.dataset.on === "1",
+        wholeWord: btnWord.dataset.on === "1",
+        regexp: btnRe.dataset.on === "1",
+      });
+      v.dispatch({ effects: setSearchQuery.of(q) });
+    }
+
+    findInput.addEventListener("input", sync);
+    replaceInput.addEventListener("input", sync);
+    findInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.shiftKey ? findPrevious(v) : findNext(v); e.preventDefault(); }
+      if (e.key === "Escape") { closeSearchPanel(v); }
+    });
+    [btnCase, btnWord, btnRe].forEach(t => t.addEventListener("click", () => {
+      t.dataset.on = t.dataset.on === "1" ? "0" : "1";
+      t.classList.toggle("csb-on", t.dataset.on === "1");
+      sync();
+    }));
+
+    return {
+      dom,
+      top: false,
+      mount() { findInput.focus(); findInput.select(); },
+      update(update) {
+        // sync match count from search state
+        const q = getSearchQuery(update.state);
+        if (q.search !== findInput.value) findInput.value = q.search;
+      },
+    };
+  }
+
+  function mkToggle(label, title) {
+    const b = document.createElement("button");
+    b.textContent = label; b.title = title;
+    b.className = "csb-toggle"; b.dataset.on = "0";
+    return b;
+  }
+  function mkIconBtn(label, title, fn) {
+    const b = document.createElement("button");
+    b.textContent = label; b.title = title; b.className = "csb-btn";
+    b.addEventListener("click", fn); return b;
+  }
 
   onMount(async () => {
     const ext = path.split(".").pop()?.toLowerCase() ?? "";
@@ -55,11 +164,17 @@
             history(),
             indentOnInput(),
             bracketMatching(),
-            keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab,
+            keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab,
               { key: "Mod-s", run: () => { onsave?.(); return true; } },
             ]),
           ]
       ),
+      search({ top: false, createPanel: createSearchPanel }),
+      showMinimap.of({
+        create() { const dom = document.createElement("div"); return { dom }; },
+        displayText: "blocks",
+        showOverlay: "mouse-over",
+      }),
       EditorView.updateListener.of((u) => {
         if (!readonly && u.docChanged && onchange) onchange(u.state.doc.toString());
       }),
@@ -93,5 +208,6 @@
   .cm-wrap :global(.cm-editor) {
     flex: 1;
     height: 100%;
+    position: relative;
   }
 </style>
