@@ -2,11 +2,12 @@
   import { onMount, onDestroy } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
+  import { SearchAddon } from "@xterm/addon-search";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
 
-  /** @type {{ active: boolean }} */
-  let { active } = $props();
+  /** @type {{ active: boolean, findTrigger?: number }} */
+  let { active, findTrigger = 0 } = $props();
 
   const MSG_INPUT = 0, MSG_OUTPUT = 1, MSG_RESIZE = 2, MSG_ERROR = 3;
   const RECONNECT_DELAY_MS = 1000;
@@ -25,6 +26,10 @@
   let term;
   /** @type {FitAddon} */
   let fitAddon;
+  /** @type {SearchAddon} */
+  let searchAddon;
+  /** @type {HTMLInputElement | null} */
+  let findInput = $state(null);
   /** @type {WebSocket | null} */
   let ws = null;
   let reconnectDelay = RECONNECT_DELAY_MS;
@@ -37,6 +42,72 @@
   let resizeObserver = null;
   let clipboardReadGranted = false, clipboardWriteGranted = false;
   let lockedCols = 0;
+  let findOpen = $state(false);
+  let findQuery = $state("");
+  let findCaseSensitive = $state(false);
+  let findResultIndex = $state(-1);
+  let findResultCount = $state(0);
+  let seenFindTrigger = $state(0);
+  let findTriggerReady = $state(false);
+
+  const searchDecorations = {
+    matchBackground: "#3a3f4b",
+    matchOverviewRuler: "#5c6370",
+    activeMatchBackground: "#e5c07b",
+    activeMatchColorOverviewRuler: "#e5c07b",
+  };
+
+  function searchOptions(incremental = false) {
+    return {
+      caseSensitive: findCaseSensitive,
+      incremental,
+      decorations: searchDecorations,
+    };
+  }
+
+  function openFind() {
+    findOpen = true;
+    setTimeout(() => {
+      findInput?.focus();
+      findInput?.select();
+    }, 0);
+  }
+
+  function closeFind() {
+    findOpen = false;
+    findResultIndex = -1;
+    findResultCount = 0;
+    searchAddon?.clearDecorations();
+    term?.clearSelection();
+    term?.focus();
+  }
+
+  function runFind(next = true, incremental = false) {
+    if (!searchAddon) return;
+    const query = findQuery;
+    if (!query.length) {
+      findResultIndex = -1;
+      findResultCount = 0;
+      searchAddon.clearDecorations();
+      term?.clearSelection();
+      return;
+    }
+    if (next) searchAddon.findNext(query, searchOptions(incremental));
+    else searchAddon.findPrevious(query, searchOptions(false));
+  }
+
+  function onFindKeydown(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+      openFind();
+      e.preventDefault();
+    } else if (e.key === "Enter") {
+      runFind(!e.shiftKey);
+      e.preventDefault();
+    } else if (e.key === "Escape") {
+      closeFind();
+      e.preventDefault();
+    }
+  }
 
   function doFit() {
     if (!active) return;
@@ -157,6 +228,18 @@
     }
   });
 
+  $effect(() => {
+    const trigger = findTrigger;
+    if (!findTriggerReady) {
+      seenFindTrigger = trigger;
+      findTriggerReady = true;
+      return;
+    }
+    if (trigger === seenFindTrigger) return;
+    seenFindTrigger = trigger;
+    if (active && term) openFind();
+  });
+
   onMount(async () => {
     term = new Terminal({
       cursorBlink: true, cursorInactiveStyle: "outline", cursorStyle: "block",
@@ -176,8 +259,14 @@
       },
     });
     fitAddon = new FitAddon();
+    searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
     term.loadAddon(new WebLinksAddon());
+    searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => {
+      findResultIndex = resultIndex;
+      findResultCount = resultCount;
+    });
     term.open(container);
 
     window.addEventListener("resize", scheduleFit);
@@ -191,6 +280,11 @@
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        openFind();
+        return false;
+      }
       if (e.ctrlKey && e.shiftKey) {
         if ((e.key === "V" || e.key === "v") && clipboardReadGranted && navigator.clipboard?.readText) {
           e.preventDefault();
@@ -261,14 +355,56 @@
   });
 </script>
 
-<div class="term-tab-wrap" bind:this={container}></div>
+<div class="term-host">
+  <div class="term-tab-wrap" bind:this={container}></div>
+  {#if findOpen}
+    <div class="term-find csb" role="search">
+      <div class="csb-row">
+        <input
+          bind:this={findInput}
+          bind:value={findQuery}
+          class="csb-input"
+          placeholder="Find"
+          aria-label="Find"
+          oninput={() => runFind(true, true)}
+          onkeydown={onFindKeydown}
+        />
+        <span class="csb-count">{findResultCount ? `${Math.max(findResultIndex + 1, 1)}/${findResultCount}` : ""}</span>
+        <button
+          class:csb-on={findCaseSensitive}
+          class="csb-toggle"
+          title="Match Case"
+          onclick={() => { findCaseSensitive = !findCaseSensitive; runFind(true, true); }}
+        >Aa</button>
+        <button class="csb-btn" title="Previous Match" onclick={() => runFind(false)}>↑</button>
+        <button class="csb-btn" title="Next Match" onclick={() => runFind(true)}>↓</button>
+        <button class="csb-close" title="Close" onclick={closeFind}>×</button>
+      </div>
+    </div>
+  {/if}
+</div>
 
 <style>
+  .term-host {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+  }
   .term-tab-wrap {
     flex: 1;
     min-width: 0;
     min-height: 0;
     overflow: hidden;
     padding: 1px 2px;
+  }
+  .term-find {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 30;
+    border-top: none;
   }
 </style>

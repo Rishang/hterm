@@ -254,7 +254,8 @@ html, body {
 .fm-node-name-active { color: #e6e6e6; }
 
 /* File content area */
-.tab-sidebar-btn {
+.tab-sidebar-btn,
+.tab-search-btn {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 100%; flex-shrink: 0;
   background: none; color: var(--text-subtle);
@@ -262,7 +263,8 @@ html, body {
   border-right: 1px solid #181a1f !important;
   transition: color 0.12s;
 }
-.tab-sidebar-btn:hover, .tab-sidebar-btn.active { color: var(--accent); }
+.tab-search-btn { width: 30px; }
+.tab-sidebar-btn:hover, .tab-sidebar-btn.active, .tab-search-btn:hover { color: var(--accent); }
 
 .tab-new-btn {
   display: flex; align-items: center; justify-content: center;

@@ -4,7 +4,7 @@
   import { EditorState } from "@codemirror/state";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from "@codemirror/language";
-  import { search, searchKeymap, findNext, findPrevious, selectMatches, getSearchQuery, setSearchQuery, SearchQuery, closeSearchPanel, replaceNext, replaceAll } from "@codemirror/search";
+  import { search, searchKeymap, findNext, findPrevious, selectMatches, getSearchQuery, setSearchQuery, SearchQuery, closeSearchPanel, openSearchPanel, replaceNext, replaceAll } from "@codemirror/search";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { showMinimap } from "@replit/codemirror-minimap";
 
@@ -56,13 +56,15 @@
               ]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dockerFile)),
   };
 
-  /** @type {{ path: string, value: string, readonly?: boolean, onchange?: (v: string) => void, onsave?: () => void }} */
-  let { path, value, readonly = false, onchange, onsave } = $props();
+  /** @type {{ path: string, value: string, readonly?: boolean, searchTrigger?: number, onchange?: (v: string) => void, onsave?: () => void }} */
+  let { path, value, readonly = false, searchTrigger = 0, onchange, onsave } = $props();
 
   /** @type {HTMLElement} */
   let container;
   /** @type {EditorView | null} */
   let view = null;
+  let seenSearchTrigger = $state(0);
+  let searchTriggerReady = $state(false);
 
   /** @param {import("@codemirror/view").EditorView} v */
   function createSearchPanel(v) {
@@ -221,6 +223,18 @@
       state: EditorState.create({ doc: value, extensions }),
       parent: container,
     });
+  });
+
+  $effect(() => {
+    const trigger = searchTrigger;
+    if (!searchTriggerReady) {
+      seenSearchTrigger = trigger;
+      searchTriggerReady = true;
+      return;
+    }
+    if (trigger === seenSearchTrigger) return;
+    seenSearchTrigger = trigger;
+    if (view) openSearchPanel(view);
   });
 
   onDestroy(() => { view?.destroy(); });

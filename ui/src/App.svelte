@@ -58,8 +58,10 @@
   let activeTab = $state("t1");
   let showSidebar = $state(false);
   let sidebarWidth = $state(220);
+  let searchTrigger = $state(0);
 
   function isTermTab(id) { return termTabs.includes(id); }
+  function openActiveSearch() { searchTrigger++; }
 
   // ── Sidebar resize ────────────────────────────────────────────────────────
   function onResizeStart(e) {
@@ -144,6 +146,14 @@
       </svg>
     </div>
 
+    <!-- Search active tab -->
+    <button class="tab-search-btn" type="button" onclick={openActiveSearch} title="Find in active tab" aria-label="Find in active tab">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+        <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/>
+        <line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+
     <!-- Terminal tabs -->
     {#each termTabs as tid (tid)}
       <div class="tab" class:active={activeTab === tid}
@@ -224,7 +234,7 @@
     <!-- Terminal tabs (all mounted, hidden when inactive so state is preserved) -->
     {#each termTabs as tid (tid)}
       <div class="term-wrap" class:hidden={activeTab !== tid}>
-        <TermTab active={activeTab === tid} />
+        <TermTab active={activeTab === tid} findTrigger={searchTrigger} />
       </div>
     {/each}
 
@@ -246,6 +256,7 @@
             <CodeEditor
               path={tab.path}
               value={tab.editContent}
+              searchTrigger={searchTrigger}
               onchange={(v) => { tab.editContent = v; }}
               onsave={async () => {
                 tab.saveStatus = "saving";
