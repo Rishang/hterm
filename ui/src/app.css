@@ -304,10 +304,11 @@ html, body {
   font-size: 12px; color: var(--text-subtle); overflow: hidden;
 }
 .fm-bc-sep { color: var(--border); }
-.fm-bc-part { color: var(--text-subtle); }
+.fm-bc-part { color: var(--text-subtle); flex: 1; }
+.fm-bc-tools { display: flex; align-items: center; gap: 6px; }
 .fm-bc-last { color: var(--text-primary); }
 .fm-lang-select {
-  margin-left: auto; padding: 1px 4px;
+  padding: 1px 4px;
   background: var(--bg-surface); color: var(--text-subtle);
   border: 1px solid var(--border); border-radius: 3px;
   font-size: 13px; cursor: pointer; outline: none;
@@ -317,6 +318,32 @@ html, body {
 .fm-lang-select::-webkit-scrollbar-track { background: transparent; }
 .fm-lang-select::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .fm-lang-select:hover { border-color: var(--text-subtle); }
+.fm-preview-btn {
+  padding: 2px 8px;
+  background: var(--bg-surface); color: var(--text-subtle);
+  border: 1px solid var(--border); border-radius: 3px;
+  font-size: 12px; cursor: pointer; outline: none;
+}
+.fm-preview-btn:hover, .fm-preview-btn.active { border-color: var(--text-subtle); color: var(--text-primary); }
+.fm-md-preview {
+  flex: 1; overflow: auto; padding: 16px 24px;
+  font-size: 14px; line-height: 1.6; color: var(--text-primary);
+  scrollbar-color: var(--border) transparent; scrollbar-width: thin;
+}
+.fm-md-preview::-webkit-scrollbar { width: 3px; }
+.fm-md-preview::-webkit-scrollbar-track { background: transparent; }
+.fm-md-preview::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.fm-md-preview h1, .fm-md-preview h2, .fm-md-preview h3 { margin: 1em 0 0.5em; color: var(--text-primary); }
+.fm-md-preview h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.fm-md-preview h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+.fm-md-preview code { background: var(--bg-surface); padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
+.fm-md-preview pre { background: var(--bg-surface); padding: 12px; border-radius: 6px; overflow-x: auto; }
+.fm-md-preview pre code { background: none; padding: 0; }
+.fm-md-preview a { color: #58a6ff; }
+.fm-md-preview blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--text-subtle); margin: 0.5em 0; }
+.fm-md-preview table { border-collapse: collapse; width: 100%; }
+.fm-md-preview th, .fm-md-preview td { border: 1px solid var(--border); padding: 6px 12px; }
+.fm-md-preview img { max-width: 100%; }
 
 /* Binary / empty / error */
 .fm-binary {

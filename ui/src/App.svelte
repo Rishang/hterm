@@ -3,6 +3,7 @@
   import CodeEditor, { supportedLangs } from "./CodeEditor.svelte";
   import TermTab from "./TermTab.svelte";
   import { fileIcon } from "./fileIcon.js";
+  import { marked } from "marked";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
@@ -41,7 +42,7 @@
   /** @param {string} path @param {string} content @param {boolean} isBinary @param {string} error */
   function openFileTab(path, content, isBinary, error) {
     if (fileTabs.find(t => t.id === path)) { activeTab = path; return; }
-    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "" });
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false });
     tabOrder.push(path);
     activeTab = path;
   }
@@ -290,36 +291,47 @@
               <code class="fm-binary-path">{tab.path}</code>
             </div>
           {:else}
-            {#key tab.id + tab.langOverride}
-            <CodeEditor
-              path={tab.path}
-              value={tab.editContent}
-              lang={tab.langOverride}
-              searchTrigger={searchTrigger}
-              onchange={(v) => { tab.editContent = v; }}
-              onsave={async () => {
-                tab.saveStatus = "saving";
-                try {
-                  await fetch(`${basePath}/api/tools/call`, {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name: "write_file", arguments: { path: tab.path, content: tab.editContent } }),
-                  });
-                  tab.content = tab.editContent; tab.saveStatus = "saved";
-                  setTimeout(() => { tab.saveStatus = ""; }, 2000);
-                } catch { tab.saveStatus = "error"; }
-              }}
-            />
-            {/key}
+            {#if tab.preview}
+              <div class="fm-md-preview">{@html marked(tab.editContent)}</div>
+            {:else}
+              {#key tab.id + tab.langOverride}
+              <CodeEditor
+                path={tab.path}
+                value={tab.editContent}
+                lang={tab.langOverride}
+                searchTrigger={searchTrigger}
+                onchange={(v) => { tab.editContent = v; }}
+                onsave={async () => {
+                  tab.saveStatus = "saving";
+                  try {
+                    await fetch(`${basePath}/api/tools/call`, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ name: "write_file", arguments: { path: tab.path, content: tab.editContent } }),
+                    });
+                    tab.content = tab.editContent; tab.saveStatus = "saved";
+                    setTimeout(() => { tab.saveStatus = ""; }, 2000);
+                  } catch { tab.saveStatus = "error"; }
+                }}
+              />
+              {/key}
+            {/if}
           {/if}
 
           <div class="fm-breadcrumb">
             <span class="fm-bc-part">{tab.path}</span>
-            <select class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.langOverride = e.target.value; }}>
-              <option value="">Auto</option>
-              {#each supportedLangs as l}
-                <option value={l}>{l}</option>
-              {/each}
-            </select>
+            <div class="fm-bc-tools">
+              {#if tab.path.endsWith(".md")}
+                <button class="fm-preview-btn" class:active={tab.preview} onclick={() => { tab.preview = !tab.preview; }}>
+                  {tab.preview ? "✎ Edit" : "👁 Preview"}
+                </button>
+              {/if}
+              <select id="lang-select" class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.langOverride = e.target.value; }}>
+                <option value="">Auto</option>
+                {#each supportedLangs as l}
+                  <option value={l}>{l}</option>
+                {/each}
+              </select>
+            </div>
           </div>
         </div>
       {/if}
