@@ -1,485 +1,286 @@
 <script>
-  import { onMount, onDestroy } from "svelte";
-  import { Terminal } from "@xterm/xterm";
-  import { FitAddon } from "@xterm/addon-fit";
-  import { WebLinksAddon } from "@xterm/addon-web-links";
-  import "@xterm/xterm/css/xterm.css";
+  import FileManager from "./FileManager.svelte";
+  import CodeEditor from "./CodeEditor.svelte";
+  import TermTab from "./TermTab.svelte";
+  import { fileIcon } from "./fileIcon.js";
 
-  const MSG_INPUT = 0;
-  const MSG_OUTPUT = 1;
-  const MSG_RESIZE = 2;
-  const MSG_ERROR = 3;
+  const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
+  // ── Terminal tabs ─────────────────────────────────────────────────────────
+  let termTabCounter = 1;
+  /** @type {string[]} terminal tab ids */
+  let termTabs = $state(["t1"]);
+
+  function newTermTab() {
+    termTabCounter++;
+    const id = `t${termTabCounter}`;
+    termTabs.push(id);
+    activeTab = id;
+  }
+
+  function closeTermTab(id) {
+    if (termTabs.length === 1) return; // keep at least one
+    const idx = termTabs.indexOf(id);
+    termTabs = termTabs.filter(t => t !== id);
+    if (activeTab === id) {
+      activeTab = termTabs[Math.min(idx, termTabs.length - 1)];
+    }
+  }
+
+  // ── File tabs ─────────────────────────────────────────────────────────────
   /**
-   * @typedef {Partial<import('@xterm/xterm').ITheme> & {
-   *   fontFamily?: string,
-   *   fontSize?: number
-   * }} ThemeConfig
-   *
-   * @typedef {{
-   *   theme?: ThemeConfig
-   * }} ClientConfig
+   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string }} FileTab
    */
+  /** @type {FileTab[]} */
+  let fileTabs = $state([]);
 
-  const RECONNECT_DELAY_MS = 1000;
-  const MAX_RECONNECT_DELAY_MS = 15000;
-  const RESIZE_DEBOUNCE_MS = 50;
-  const DEFAULT_SCROLLBACK_ROWS = 3000;
-  const MAX_MERGED_OUTPUT_BYTES = 256 * 1024;
-  const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
-
-  /** @type {HTMLElement | undefined} */
-  let terminalContainer;
-  /** @type {Terminal | undefined} */
-  let term;
-  /** @type {FitAddon | undefined} */
-  let fitAddon;
-  /** @type {WebSocket | undefined} */
-  let ws;
-  let reconnectDelay = RECONNECT_DELAY_MS;
-  /** @type {number | null} */
-  let reconnectTimer = null;
-  /** @type {number | null} */
-  let resizeTimer = null;
-  /** @type {number | null} */
-  let initialFitTimer = null;
-  /** @type {Uint8Array[]} */
-  let pendingOutput = [];
-  let pendingOutputBytes = 0;
-  let rafScheduled = false;
-  /** @type {number | null} */
-  let rafId = null;
-  /** @type {ResizeObserver | null} */
-  let resizeObserver = null;
-  /** @type {(() => void) | null} */
-  let viewportResizeHandler = null;
-  let clipboardReadGranted = false;
-  let clipboardWriteGranted = false;
-
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  const basePath = import.meta.env.DEV
-    ? ""
-    : window.location.pathname.replace(/\/$/, "");
-
-  /** @param {string} path */
-  function serverPath(path) {
-    return `${basePath}${path}`;
+  /** @param {string} path @param {string} content @param {boolean} isBinary @param {string} error */
+  function openFileTab(path, content, isBinary, error) {
+    if (fileTabs.find(t => t.id === path)) { activeTab = path; return; }
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "" });
+    activeTab = path;
   }
 
-  // ---- Load config from server ----
-  /** @returns {Promise<ClientConfig>} */
-  async function loadConfig() {
-    try {
-      const res = await fetch(serverPath("/api/config"));
-      if (!res.ok) return {};
-      return await res.json();
-    } catch {
-      return {};
+  function closeFileTab(id) {
+    const idx = fileTabs.findIndex(t => t.id === id);
+    if (idx === -1) return;
+    fileTabs.splice(idx, 1);
+    if (activeTab === id) {
+      // fileTabs[idx] is now the next tab (or undefined), fileTabs[idx-1] is the previous
+      activeTab = fileTabs[idx]?.id ?? fileTabs[idx - 1]?.id ?? termTabs[0];
     }
   }
 
-  // ---- Build xterm.js theme from config ----
-  /** @param {ThemeConfig} themeConfig */
-  function buildTheme(themeConfig) {
-    if (!themeConfig || Object.keys(themeConfig).length === 0) {
-      return undefined;
+  /** @returns {FileTab|undefined} */
+  function activeFileTab() { return fileTabs.find(t => t.id === activeTab); }
+
+  // ── Active tab ────────────────────────────────────────────────────────────
+  let activeTab = $state("t1");
+  let showSidebar = $state(false);
+  let sidebarWidth = $state(220);
+  let searchTrigger = $state(0);
+
+  function isTermTab(id) { return termTabs.includes(id); }
+  function openActiveSearch() { searchTrigger++; }
+
+  // ── Sidebar resize ────────────────────────────────────────────────────────
+  function onResizeStart(e) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    function onMove(e) {
+      sidebarWidth = Math.min(600, Math.max(120, startW + e.clientX - startX));
     }
-    /** @type {import('@xterm/xterm').ITheme} */
-    const theme = {};
-    /** @type {(keyof import('@xterm/xterm').ITheme)[]} */
-    const themeKeys = [
-      "background",
-      "foreground",
-      "cursor",
-      "cursorAccent",
-      "selectionBackground",
-      "selectionForeground",
-      "black",
-      "red",
-      "green",
-      "yellow",
-      "blue",
-      "magenta",
-      "cyan",
-      "white",
-      "brightBlack",
-      "brightRed",
-      "brightGreen",
-      "brightYellow",
-      "brightBlue",
-      "brightMagenta",
-      "brightCyan",
-      "brightWhite",
-    ];
-    for (const key of themeKeys) {
-      const value = themeConfig[key];
-      if (typeof value === "string") {
-        theme[key] = value;
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  // ── Tab drag-to-reorder ───────────────────────────────────────────────────
+  let dragSrcId = null;
+  function onDragStart(e, id) { dragSrcId = id; e.dataTransfer.effectAllowed = "move"; }
+  function onDragOver(e, id) { if (dragSrcId && dragSrcId !== id) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }
+  function onDrop(e, id) {
+    e.preventDefault();
+    if (!dragSrcId || dragSrcId === id) return;
+    const isTermSrc = termTabs.includes(dragSrcId), isTermDst = termTabs.includes(id);
+    if (isTermSrc && isTermDst) {
+      const a = termTabs.indexOf(dragSrcId), b = termTabs.indexOf(id);
+      termTabs.splice(a, 1); termTabs.splice(b, 0, dragSrcId); termTabs = termTabs;
+    } else if (!isTermSrc && !isTermDst) {
+      const a = fileTabs.findIndex(t => t.id === dragSrcId), b = fileTabs.findIndex(t => t.id === id);
+      fileTabs.splice(a, 1); fileTabs.splice(b, 0, fileTabs.splice(a, 0)[0]);
+      // re-do cleanly
+      const tabs = [...fileTabs]; const [item] = tabs.splice(a, 1); tabs.splice(b, 0, item); fileTabs = tabs;
+    }
+    dragSrcId = null;
+  }
+
+  // Re-fetch file content when switching to a file tab (picks up external edits)
+  // Only updates if the user has no unsaved changes
+  let prevActiveTab = $state("t1");
+  $effect(() => {
+    const tab = activeTab;
+    if (tab === prevActiveTab) return;
+    prevActiveTab = tab;
+    if (termTabs.includes(tab)) return;
+    const ft = fileTabs.find(t => t.id === tab);
+    if (!ft || ft.isBinary || ft.error) return;
+    // Don't overwrite unsaved edits
+    if (ft.editContent !== ft.content) return;
+    fetch(`${basePath}/api/tools/call`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "read_file", arguments: { path: ft.path } }),
+    }).then(r => r.json()).then(result => {
+      const text = result.content?.[0]?.text ?? result.text ?? "";
+      // Re-check: still no unsaved edits before applying
+      if (ft.editContent === ft.content) {
+        ft.content = text;
+        ft.editContent = text;
       }
-    }
-    return theme;
-  }
-
-  // ---- Binary message helpers ----
-  /**
-   * @param {number} type
-   * @param {string | Uint8Array | undefined} [payload]
-   */
-  function sendBinary(type, payload) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    if (payload instanceof Uint8Array) {
-      const msg = new Uint8Array(1 + payload.length);
-      msg[0] = type;
-      msg.set(payload, 1);
-      ws.send(msg);
-    } else if (typeof payload === "string") {
-      const encoded = encoder.encode(payload);
-      const msg = new Uint8Array(1 + encoded.length);
-      msg[0] = type;
-      msg.set(encoded, 1);
-      ws.send(msg);
-    } else {
-      ws.send(new Uint8Array([type]));
-    }
-  }
-
-  /** @param {string | Uint8Array} data */
-  function sendInput(data) {
-    sendBinary(MSG_INPUT, data);
-  }
-
-  /**
-   * @param {number} cols
-   * @param {number} rows
-   */
-  function sendResize(cols, rows) {
-    const buf = new ArrayBuffer(5);
-    const view = new DataView(buf);
-    view.setUint8(0, MSG_RESIZE);
-    view.setUint16(1, cols, false);
-    view.setUint16(3, rows, false);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(buf);
-    }
-  }
-
-  function scheduleFlush() {
-    if (rafScheduled) return;
-    rafScheduled = true;
-    rafId = requestAnimationFrame(flushPendingOutput);
-  }
-
-  function flushPendingOutput() {
-    rafScheduled = false;
-    rafId = null;
-
-    const chunks = pendingOutput;
-    const totalLen = pendingOutputBytes;
-    if (chunks.length === 0 || !term) return;
-
-    pendingOutput = [];
-    pendingOutputBytes = 0;
-
-    // Fast path: single chunk — write directly, no merge allocation.
-    if (chunks.length === 1) {
-      term.write(chunks[0]);
-      return;
-    }
-
-    // Avoid large merge allocations under heavy output; xterm can queue writes.
-    if (totalLen > MAX_MERGED_OUTPUT_BYTES) {
-      for (const chunk of chunks) term.write(chunk);
-      return;
-    }
-
-    const merged = new Uint8Array(totalLen);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
-    term.write(merged);
-  }
-
-  async function loadWebglRenderer() {
-    try {
-      const { WebglAddon } = await import("@xterm/addon-webgl");
-      if (!term) return;
-      const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => webglAddon.dispose());
-      term.loadAddon(webglAddon);
-    } catch {
-      console.log("WebGL not available, using canvas renderer");
-    }
-  }
-
-  function init() {
-    if (!terminalContainer) return;
-
-    /** @type {import('@xterm/xterm').ITerminalOptions} */
-    const termOptions = {
-      cursorBlink: true,
-      cursorInactiveStyle: "outline",
-      cursorStyle: "block",
-      scrollback: DEFAULT_SCROLLBACK_ROWS,
-      tabStopWidth: 4,
-      allowProposedApi: true,
-      ignoreBracketedPasteMode: false,
-      theme: {
-        background: "#1e1e2e",
-      },
-    };
-
-    term = new Terminal(termOptions);
-    fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
-
-    term.loadAddon(fitAddon);
-    term.loadAddon(webLinksAddon);
-
-    term.open(terminalContainer);
-    loadWebglRenderer();
-
-    function doFit() {
-      try { fitAddon?.fit(); } catch { /* ignore */ }
-    }
-
-    function scheduleFit() {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        doFit();
-        resizeTimer = null;
-      }, RESIZE_DEBOUNCE_MS);
-    }
-
-    // ResizeObserver handles window/element resizes after initial load
-    resizeObserver = new ResizeObserver(scheduleFit);
-    resizeObserver.observe(terminalContainer);
-
-    // visualViewport covers orientation changes and mobile keyboard events
-    if (window.visualViewport) {
-      viewportResizeHandler = scheduleFit;
-      window.visualViewport.addEventListener("resize", viewportResizeHandler);
-    }
-
-    term.onData((data) => {
-      // Forward all data, including bracketed paste sequences, to the server.
-      sendInput(data);
-    });
-
-    term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
-      if (e.ctrlKey && e.shiftKey) {
-        if (e.key === "V" || e.key === "v") {
-          if (
-            !clipboardReadGranted ||
-            !navigator.clipboard ||
-            typeof navigator.clipboard.readText !== "function"
-          ) {
-            // Let the browser handle the shortcut so we don't trigger
-            // a clipboard permission prompt from script.
-            return true;
-          }
-          e.preventDefault();
-          navigator.clipboard
-            .readText()
-            .then((text) => {
-              if (!text) return;
-              if (typeof term.paste === "function") {
-                // Use xterm's paste helper so bracketedPasteMode is honoured.
-                term.paste(text);
-              } else {
-                // Fallback for older xterm versions.
-                sendInput(text);
-              }
-            })
-            .catch((err) => console.warn("Clipboard read failed:", err));
-          return false;
-        }
-        if (e.key === "C" || e.key === "c") {
-          if (
-            !clipboardWriteGranted ||
-            !navigator.clipboard ||
-            typeof navigator.clipboard.writeText !== "function"
-          ) {
-            // Let the browser handle the shortcut so we don't trigger
-            // a clipboard permission prompt from script.
-            return true;
-          }
-          e.preventDefault();
-          const sel = term.getSelection();
-          if (sel) {
-            navigator.clipboard
-              .writeText(sel)
-              .catch((err) => console.warn("Clipboard write failed:", err));
-          }
-          return false;
-        }
-      }
-      return true;
-    });
-
-    term.onResize(({ rows, cols }) => sendResize(cols, rows));
-
-    // Force cursor blink to override any addon interference (known xterm.js quirk)
-    term.options.cursorBlink = true;
-    term.focus();
-
-    // Fit first, then connect — ensures PTY receives correct cols/rows on first open.
-    // rAF guarantees the browser has committed the layout before we measure.
-    requestAnimationFrame(() => {
-      doFit();
-      connect();
-      // Second pass after WebGL/font init may have shifted cell size
-      initialFitTimer = setTimeout(() => {
-        doFit();
-        term?.focus();
-        initialFitTimer = null;
-      }, 150);
-    });
-
-    // Load config lazily so it doesn't block terminal rendering
-    loadConfig().then((config) => {
-      const themeConfig = config.theme || {};
-      const theme = buildTheme(themeConfig);
-      if (!term) return;
-      if (theme) term.options.theme = theme;
-      if (themeConfig.fontFamily)
-        term.options.fontFamily = themeConfig.fontFamily;
-      if (themeConfig.fontSize) term.options.fontSize = themeConfig.fontSize;
-      // Re-fit after font changes since cell dimensions may have changed
-      try { fitAddon?.fit(); } catch { /* ignore */ }
-    });
-  }
-
-  function connect() {
-    if (
-      ws &&
-      (ws.readyState === WebSocket.CONNECTING ||
-        ws.readyState === WebSocket.OPEN)
-    ) {
-      return;
-    }
-
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    let host = window.location.host;
-    // For local dev with vite dev server, fallback to 7681
-    if (import.meta.env.DEV) {
-      host = "127.0.0.1:7681";
-    }
-
-    ws = new WebSocket(`${protocol}//${host}${serverPath("/ws")}`);
-    ws.binaryType = "arraybuffer";
-
-    ws.onopen = () => {
-      reconnectDelay = RECONNECT_DELAY_MS;
-      // Fit to get accurate cols/rows, then immediately push the size to the PTY
-      // so TUI apps (htop, vim, etc.) start with the correct dimensions.
-      if (fitAddon) {
-        try { fitAddon.fit(); } catch { /* ignore */ }
-      }
-      if (term) sendResize(term.cols, term.rows);
-    };
-
-    ws.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        console.warn(
-          "Received text frame, expected binary arraybuffer.",
-          event.data,
-        );
-        return; // Ignore strings to avoid typed array conversion errors
-      }
-
-      const data = new Uint8Array(event.data);
-      if (data.length === 0) return;
-
-      switch (data[0]) {
-        case MSG_OUTPUT:
-          pendingOutput.push(data.subarray(1));
-          pendingOutputBytes += data.length - 1;
-          if (pendingOutputBytes >= MAX_PENDING_OUTPUT_BYTES) {
-            if (rafId !== null) cancelAnimationFrame(rafId);
-            flushPendingOutput();
-          } else {
-            scheduleFlush();
-          }
-          break;
-        case MSG_ERROR: {
-          const msg = decoder.decode(data.subarray(1));
-          term.write(`\r\n\x1b[31m[Error: ${msg}]\x1b[0m\r\n`);
-          break;
-        }
-      }
-    };
-
-    ws.onclose = () => {
-      scheduleReconnect();
-    };
-
-    ws.onerror = () => ws.close();
-  }
-
-  function scheduleReconnect() {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 1.5, MAX_RECONNECT_DELAY_MS);
-  }
-
-  onMount(() => {
-    init();
-    // Probe clipboard permissions without triggering prompts; we only
-    // use the Clipboard API when permission has already been granted.
-    try {
-      if (navigator.permissions && navigator.clipboard) {
-        navigator.permissions
-          .query({ name: "clipboard-read" })
-          .then((status) => {
-            clipboardReadGranted = status.state === "granted";
-            status.onchange = () => {
-              clipboardReadGranted = status.state === "granted";
-            };
-          })
-          .catch(() => {});
-        navigator.permissions
-          .query({ name: "clipboard-write" })
-          .then((status) => {
-            clipboardWriteGranted = status.state === "granted";
-            status.onchange = () => {
-              clipboardWriteGranted = status.state === "granted";
-            };
-          })
-          .catch(() => {});
-      }
-    } catch {
-      // If Permissions API is unavailable, fall back to browser defaults.
-    }
-  });
-
-  onDestroy(() => {
-    if (ws) {
-      ws.onclose = null; // Prevent zombie reconnect loop
-      ws.close();
-      ws = null;
-    }
-    if (resizeTimer) clearTimeout(resizeTimer);
-    if (initialFitTimer) clearTimeout(initialFitTimer);
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (rafId !== null) cancelAnimationFrame(rafId);
-    pendingOutput = [];
-    pendingOutputBytes = 0;
-    if (resizeObserver) resizeObserver.disconnect();
-    if (viewportResizeHandler && window.visualViewport) {
-      window.visualViewport.removeEventListener("resize", viewportResizeHandler);
-    }
-    if (term) term.dispose();
+    }).catch(() => {});
   });
 </script>
 
-<div id="terminal-container">
-  <div id="terminal" bind:this={terminalContainer}></div>
+<div id="app-root">
+  <div id="tab-bar" role="toolbar" tabindex="-1" onmousedown={(e) => e.preventDefault()}>
+    <!-- Sidebar toggle -->
+    <div class="tab-sidebar-btn" class:active={showSidebar}
+      role="button" tabindex="-1"
+      onclick={() => { showSidebar = !showSidebar; }}
+      onkeydown={(e) => e.key === "Enter" && (showSidebar = !showSidebar)}
+      title="Toggle file explorer">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3.5 7.5V6a2 2 0 0 1 2-2h4.2l2 2H18a2 2 0 0 1 2 2v1.5"/>
+        <path d="M3 9.5h18l-1.2 8.2a2 2 0 0 1-2 1.8H6.2a2 2 0 0 1-2-1.8L3 9.5z"/>
+        <path d="M7.5 13h5"/>
+        <path d="M7.5 16h8"/>
+      </svg>
+    </div>
+
+    <!-- Search active tab -->
+    <button class="tab-search-btn" type="button" onclick={openActiveSearch} title="Find in active tab" aria-label="Find in active tab">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+        <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/>
+        <line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+
+    <!-- Terminal tabs -->
+    {#each termTabs as tid (tid)}
+      <div class="tab" class:active={activeTab === tid}
+        role="button" tabindex="-1"
+        draggable="true"
+        ondragstart={(e) => onDragStart(e, tid)}
+        ondragover={(e) => onDragOver(e, tid)}
+        ondrop={(e) => onDrop(e, tid)}
+        onclick={() => { activeTab = tid; }}
+        onkeydown={(e) => e.key === "Enter" && (activeTab = tid)}>
+        <svg class="tab-icon-svg" width="13" height="13" viewBox="0 0 16 16" fill="none">
+          <polyline points="2,5 7,8 2,11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <line x1="8.5" y1="11" x2="14" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        <span class="tab-name">Terminal {termTabs.length > 1 ? termTabs.indexOf(tid) + 1 : ""}</span>
+        {#if termTabs.length > 1}
+          <span class="tab-close" role="button" tabindex="-1"
+            onclick={(e) => { e.stopPropagation(); closeTermTab(tid); }}
+            onkeydown={(e) => e.key === "Enter" && (e.stopPropagation(), closeTermTab(tid))}>
+            <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </span>
+        {/if}
+      </div>
+    {/each}
+
+    <!-- File tabs -->
+    {#each fileTabs as tab (tab.id)}
+      {@const icon = fileIcon(tab.name)}
+      <div class="tab" class:active={activeTab === tab.id}
+        role="button" tabindex="-1"
+        draggable="true"
+        ondragstart={(e) => onDragStart(e, tab.id)}
+        ondragover={(e) => onDragOver(e, tab.id)}
+        ondrop={(e) => onDrop(e, tab.id)}
+        class:tab-modified={tab.mode === "edit" && tab.editContent !== tab.content}
+        onclick={() => { activeTab = tab.id; }}
+        onkeydown={(e) => e.key === "Enter" && (activeTab = tab.id)}>
+        {#if icon}
+          <span class="tab-file-badge" style:background={icon.bg} style:color={icon.color}>{icon.label}</span>
+        {:else}
+          <svg class="tab-icon-svg" width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path d="M4 2h5.5L12 4.5V14H4V2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            <polyline points="9,2 9,5 12,5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/>
+          </svg>
+        {/if}
+        <span class="tab-name">{tab.name}</span>
+        {#if tab.saveStatus === "saving"}
+          <span style="font-size:10px;opacity:0.5">↑</span>
+        {:else if tab.saveStatus === "saved"}
+          <span style="font-size:10px;color:#98c379">✓</span>
+        {:else if tab.saveStatus === "error"}
+          <span style="font-size:10px;color:#e06c75">!</span>
+        {/if}
+        <span class="tab-close" role="button" tabindex="-1"
+          onclick={(e) => { e.stopPropagation(); closeFileTab(tab.id); }}
+          onkeydown={(e) => e.key === "Enter" && (e.stopPropagation(), closeFileTab(tab.id))}>
+          <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </span>
+      </div>
+    {/each}
+
+    <!-- New terminal tab -->
+    <div class="tab-new-btn" role="button" tabindex="-1" onclick={newTermTab} onkeydown={(e) => e.key === "Enter" && newTermTab()} title="New terminal">
+      <svg width="14" height="14" viewBox="0 0 14 14"><line x1="7" y1="1.5" x2="7" y2="12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="1.5" y1="7" x2="12.5" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+
+  <div id="app-body">
+    <!-- Sidebar -->
+    {#if showSidebar}
+      <div class="fm-sidebar-wrap" style:width="{sidebarWidth}px">
+        <FileManager bind:fileTabs {activeTab} {openFileTab} />
+      </div>
+      <button class="fm-resize-handle" type="button" aria-label="Resize file explorer"
+        onmousedown={onResizeStart}></button>
+    {/if}
+
+    <!-- Terminal tabs (all mounted, hidden when inactive so state is preserved) -->
+    {#each termTabs as tid (tid)}
+      <div class="term-wrap" class:hidden={activeTab !== tid}>
+        <TermTab active={activeTab === tid} findTrigger={searchTrigger} />
+      </div>
+    {/each}
+
+    <!-- File content -->
+    {#if !isTermTab(activeTab)}
+      {@const tab = activeFileTab()}
+      {#if tab}
+        <div id="file-content">
+          {#if tab.error}
+            <div class="fm-error fm-error-main">{tab.error}</div>
+          {:else if tab.isBinary}
+            <div class="fm-binary">
+              <span class="fm-binary-icon">⬡</span>
+              <span>Binary file — cannot display as text</span>
+              <code class="fm-binary-path">{tab.path}</code>
+            </div>
+          {:else}
+            {#key tab.id}
+            <CodeEditor
+              path={tab.path}
+              value={tab.editContent}
+              searchTrigger={searchTrigger}
+              onchange={(v) => { tab.editContent = v; }}
+              onsave={async () => {
+                tab.saveStatus = "saving";
+                try {
+                  await fetch(`${basePath}/api/tools/call`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: "write_file", arguments: { path: tab.path, content: tab.editContent } }),
+                  });
+                  tab.content = tab.editContent; tab.saveStatus = "saved";
+                  setTimeout(() => { tab.saveStatus = ""; }, 2000);
+                } catch { tab.saveStatus = "error"; }
+              }}
+            />
+            {/key}
+          {/if}
+
+          <div class="fm-breadcrumb">
+            {#each tab.path.split("/").filter(Boolean) as part, i}
+              {#if i > 0}<span class="fm-bc-sep">›</span>{/if}
+              <span class="fm-bc-part">{part}</span>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    {/if}
+  </div>
 </div>

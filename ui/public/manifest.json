@@ -1,0 +1,12 @@
+{
+  "name": "hterm",
+  "short_name": "hterm",
+  "description": "Web terminal with file manager",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#21252b",
+  "theme_color": "#21252b",
+  "icons": [
+    { "src": "/static/terminal.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

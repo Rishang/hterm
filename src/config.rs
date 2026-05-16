@@ -288,8 +288,7 @@ impl AppConfig {
 pub struct ConfigResponse {
     pub theme:    ThemeConfig,
     pub writable: bool,
-    /// Whether to activate the Sixel graphics addon in xterm.js.
     pub sixel:    bool,
-    /// Whether the server will honour `?arg=` query parameters on the WS URL.
     pub url_arg:  bool,
+    pub cwd:      String,
 }
