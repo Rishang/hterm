@@ -117,22 +117,29 @@
     if (node.is_dir) { toggleDir(node); return; }
     if (fileTabs.find(t => t.id === node.path)) { openFileTab(node.path, "", false, ""); return; }
 
-    let content = "", isBinary = false, err = "";
+    openFileTab(node.path, "", false, "", true);
     try {
-      const res = await fetch(`${basePath}/api/tools/call`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "read_file", arguments: { path: node.path } }),
-      });
+      const res = await fetch(`${basePath}/api/files/read?path=${encodeURIComponent(node.path)}`);
+      if (!res.ok) throw new Error(await res.text());
       const result = await res.json();
-      const text = result.content?.[0]?.text ?? result.text ?? "";
-      const sample = text.slice(0, 4096);
-      const nonPrintable = (sample.match(/[\x00-\x08\x0e-\x1f\x7f]/g) || []).length;
-      isBinary = sample.includes("\x00") || nonPrintable / (sample.length || 1) > 0.1;
-      content = isBinary ? "" : text;
-    } catch (e) { err = String(e); }
-
-    openFileTab(node.path, content, isBinary, err);
+      const tab = fileTabs.find(t => t.id === node.path);
+      if (!tab) return;
+      tab.content = result.content ?? "";
+      tab.editContent = tab.content;
+      tab.isBinary = !!result.is_binary;
+      tab.error = "";
+      tab.loading = false;
+      fileTabs = fileTabs;
+    } catch (e) {
+      const tab = fileTabs.find(t => t.id === node.path);
+      if (!tab) return;
+      tab.content = "";
+      tab.editContent = "";
+      tab.isBinary = false;
+      tab.error = String(e);
+      tab.loading = false;
+      fileTabs = fileTabs;
+    }
   }
 
   // ── Path editing ──────────────────────────────────────────────────────────

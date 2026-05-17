@@ -34,6 +34,13 @@ pub struct FileEntry {
     is_dir: bool,
 }
 
+#[derive(Serialize)]
+pub struct ReadFileResponse {
+    content: String,
+    is_binary: bool,
+    size: u64,
+}
+
 pub async fn list_files_handler(
     Query(q): Query<FilesQuery>,
 ) -> impl IntoResponse {
@@ -235,8 +242,45 @@ pub async fn delete_file_handler(
 pub fn files_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_files_handler).post(create_file_handler))
+        .route("/read", get(read_file_handler))
         .route("/copy", post(copy_file_handler))
         .route("/{*path}", patch(rename_file_handler).delete(delete_file_handler))
+}
+
+pub async fn read_file_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<FilesQuery>,
+) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let Some(path) = q.path.as_deref().and_then(safe_path) else {
+        return bad("invalid path");
+    };
+
+    match tools::read_file_content(&path.to_string_lossy()).await {
+        Ok(tools::FileRead::Text { content, size }) => (
+            StatusCode::OK,
+            Json(ReadFileResponse {
+                content,
+                is_binary: false,
+                size,
+            }),
+        )
+            .into_response(),
+        Ok(tools::FileRead::Binary { size }) => (
+            StatusCode::OK,
+            Json(ReadFileResponse {
+                content: String::new(),
+                is_binary: true,
+                size,
+            }),
+        )
+            .into_response(),
+        Err(e) => bad(e),
+    }
 }
 
 #[derive(Deserialize)]

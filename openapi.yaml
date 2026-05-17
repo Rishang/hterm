@@ -488,6 +488,54 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/files/read:
+    get:
+      summary: Read file content
+      description: |
+        Read a text file for the UI/editor fast path. Binary files are detected
+        and returned as metadata with an empty content string.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Absolute path of the file to read
+          schema:
+            type: string
+          example: "/home/user/projects/main.rs"
+      responses:
+        '200':
+          description: File read result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadFileResponse'
+              examples:
+                text:
+                  summary: Text file
+                  value:
+                    content: "fn main() {}\n"
+                    is_binary: false
+                    size: 13
+                binary:
+                  summary: Binary file
+                  value:
+                    content: ""
+                    is_binary: true
+                    size: 4096
+        '400':
+          description: Invalid path, too large, missing, or not a regular file
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /api/files/copy:
     post:
       summary: Copy a file or directory
@@ -700,6 +748,20 @@ components:
         is_dir:
           type: boolean
           description: True if directory
+
+    ReadFileResponse:
+      type: object
+      properties:
+        content:
+          type: string
+          description: UTF-8 text content. Empty when the file is binary.
+        is_binary:
+          type: boolean
+          description: True when the file appears to be binary or invalid UTF-8.
+        size:
+          type: integer
+          format: int64
+          description: File size in bytes
 
     CreateFileRequest:
       type: object

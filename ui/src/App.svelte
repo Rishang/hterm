@@ -35,15 +35,15 @@
 
   // ── File tabs ─────────────────────────────────────────────────────────────
   /**
-   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string, skipRefreshOnActivate?: boolean }} FileTab
+   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string, loading?: boolean, skipRefreshOnActivate?: boolean }} FileTab
    */
   /** @type {FileTab[]} */
   let fileTabs = $state([]);
 
-  /** @param {string} path @param {string} content @param {boolean} isBinary @param {string} error */
-  function openFileTab(path, content, isBinary, error) {
+  /** @param {string} path @param {string} content @param {boolean} isBinary @param {string} error @param {boolean} loading */
+  function openFileTab(path, content, isBinary, error, loading = false) {
     if (fileTabs.find(t => t.id === path)) { activeTab = path; return; }
-    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, skipRefreshOnActivate: true });
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, loading, skipRefreshOnActivate: true });
     tabOrder.push(path);
     activeTab = path;
   }
@@ -173,23 +173,23 @@
     prevActiveTab = tab;
     if (termTabs.includes(tab)) return;
     const ft = fileTabs.find(t => t.id === tab);
-    if (!ft || ft.isBinary || ft.error) return;
+    if (!ft || ft.loading || ft.isBinary || ft.error) return;
     if (ft.skipRefreshOnActivate) {
       ft.skipRefreshOnActivate = false;
       return;
     }
     // Don't overwrite unsaved edits
     if (ft.editContent !== ft.content) return;
-    fetch(`${basePath}/api/tools/call`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "read_file", arguments: { path: ft.path } }),
-    }).then(r => r.json()).then(result => {
-      const text = result.content?.[0]?.text ?? result.text ?? "";
+    fetch(`${basePath}/api/files/read?path=${encodeURIComponent(ft.path)}`).then(async r => {
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }).then(result => {
+      const text = result.content ?? "";
       // Re-check: still no unsaved edits before applying
       if (ft.editContent === ft.content) {
         ft.content = text;
         ft.editContent = text;
+        ft.isBinary = !!result.is_binary;
       }
     }).catch(() => {});
   });
@@ -317,7 +317,9 @@
       {@const tab = activeFileTab()}
       {#if tab}
         <div id="file-content">
-          {#if tab.error}
+          {#if tab.loading}
+            <div class="fm-loading">Loading...</div>
+          {:else if tab.error}
             <div class="fm-error fm-error-main">{tab.error}</div>
           {:else if tab.isBinary}
             <div class="fm-binary">

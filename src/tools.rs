@@ -14,13 +14,18 @@ use crate::ws::AppState;
 pub(crate) const MAX_CMD_OUTPUT_TOTAL: usize = 10 * 1024 * 1024; // 10 MiB
 
 /// Maximum file size that `read_file` will load into memory.
-const MAX_READ_FILE: u64 = 8 * 1024 * 1024; // 8 MiB
+pub(crate) const MAX_READ_FILE: u64 = 8 * 1024 * 1024; // 8 MiB
 
 /// Maximum custom index.html size accepted from disk.
 pub(crate) const MAX_CUSTOM_INDEX_SIZE: u64 = 2 * 1024 * 1024; // 2 MiB
 
 /// Bytes sampled to classify files before deciding whether full reads are safe.
 const FILE_TYPE_SAMPLE_SIZE: usize = 8 * 1024;
+
+pub(crate) enum FileRead {
+    Text { content: String, size: u64 },
+    Binary { size: u64 },
+}
 
 // ── Tool definitions (camelCase, Claude Code inspired) ───────────────────────
 
@@ -607,47 +612,51 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
 async fn read_file_tool(args: &Value) -> Result<Value, String> {
     let path = extract_string(args, "path")?;
 
-    // Check file size before reading to prevent OOM on huge files.
-    let meta = match tokio::fs::metadata(&path).await {
+    match read_file_content(&path).await {
+        Ok(FileRead::Text { content, .. }) => Ok(tool_success(content)),
+        Ok(FileRead::Binary { .. }) => {
+            let meta = tokio::fs::metadata(&path).await
+                .map_err(|e| format!("Failed to read metadata of '{}': {}", path, e))?;
+            let metadata = format_file_metadata(&path, &meta).await;
+            Ok(tool_success(format!(
+                "Binary file not read. Returning metadata only.\n{}",
+                metadata
+            )))
+        }
+        Err(e) => Ok(tool_error(e)),
+    }
+}
+
+pub(crate) async fn read_file_content(path: &str) -> Result<FileRead, String> {
+    let meta = match tokio::fs::metadata(path).await {
         Ok(m) if !m.is_file() => {
-            return Ok(tool_error(format!("'{}' is not a regular file", path)));
+            return Err(format!("'{}' is not a regular file", path));
         }
         Ok(m) if m.len() > MAX_READ_FILE => {
-            return Ok(tool_error(format!(
+            return Err(format!(
                 "File '{}' is too large ({} bytes, max {} MiB). Use bash tool with head/tail instead.",
                 path,
                 m.len(),
                 MAX_READ_FILE / (1024 * 1024)
-            )));
+            ));
         }
         Err(e) => {
-            return Ok(tool_error(format!("Failed to read '{}': {}", path, e)));
+            return Err(format!("Failed to read '{}': {}", path, e));
         }
         Ok(m) => m,
     };
 
-    let sample = match read_file_sample(&path).await {
-        Ok(sample) => sample,
-        Err(e) => return Ok(tool_error(format!("Failed to inspect '{}': {}", path, e))),
-    };
-
-    if sample_is_binary(&sample) {
-        let metadata = format_file_metadata(&path, &meta).await;
-        return Ok(tool_success(format!(
-            "Binary file not read. Returning metadata only.\n{}",
-            metadata
-        )));
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+    let sample_len = bytes.len().min(FILE_TYPE_SAMPLE_SIZE);
+    if sample_is_binary(&bytes[..sample_len]) {
+        return Ok(FileRead::Binary { size: meta.len() });
     }
 
-    match tokio::fs::read_to_string(&path).await {
-        Ok(content) => Ok(tool_success(content)),
-        Err(e) => {
-            let metadata = format_file_metadata(&path, &meta).await;
-            Ok(tool_success(format!(
-                "File is not valid UTF-8 text and was not read. Returning metadata only.\n{}\nRead error: {}",
-                metadata, e
-            )))
-        }
+    match String::from_utf8(bytes) {
+        Ok(content) => Ok(FileRead::Text { content, size: meta.len() }),
+        Err(_) => Ok(FileRead::Binary { size: meta.len() }),
     }
 }
 
@@ -813,16 +822,6 @@ async fn format_file_metadata(path: &str, meta: &std::fs::Metadata) -> String {
         modified,
         file_info
     )
-}
-
-async fn read_file_sample(path: &str) -> std::io::Result<Vec<u8>> {
-    use tokio::io::AsyncReadExt;
-
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut sample = vec![0u8; FILE_TYPE_SAMPLE_SIZE];
-    let n = file.read(&mut sample).await?;
-    sample.truncate(n);
-    Ok(sample)
 }
 
 fn sample_is_binary(sample: &[u8]) -> bool {
