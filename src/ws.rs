@@ -32,8 +32,9 @@ const MAX_COALESCE_SIZE: usize = 16 * 1024;
 /// Outbound message channel depth (writer task).
 const WS_OUT_CAP: usize = 32;
 
-/// Inbound command channel depth (keystroke + resize bursts are small).
-const PTY_CMD_CAP: usize = 8;
+/// Inbound command channel depth. Keep this large enough that short paste/input
+/// bursts do not block the WebSocket reader while PTY output is busy.
+const PTY_CMD_CAP: usize = 64;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -304,6 +305,13 @@ async fn pty_main_loop(
 
     'outer: loop {
         tokio::select! {
+            biased;
+
+            // ── Client → PTY (keystrokes / resize) ───────────────────────────
+            cmd = cmd_rx.recv() => {
+                if apply_cmd(cmd, &session).await { break; }
+            },
+
             // ── PTY → client (hot path) ───────────────────────────────────────
             res = session.read(&mut buf) => match res {
                 Ok(0) | Err(_) => break,
@@ -319,7 +327,10 @@ async fn pty_main_loop(
 
                         'inner: loop {
                             tokio::select! {
-                                biased; // drain PTY first; handle cmds opportunistically
+                                biased;
+                                cmd = cmd_rx.recv() => {
+                                    if apply_cmd(cmd, &session).await { break 'outer; }
+                                },
                                 res = session.read(&mut buf) => match res {
                                     Ok(0) | Err(_) => {
                                         flush_coalesce(&mut coalesce, &out_tx).await;
@@ -332,9 +343,6 @@ async fn pty_main_loop(
                                         }
                                     }
                                 },
-                                cmd = cmd_rx.recv() => {
-                                    if apply_cmd(cmd, &session).await { break 'outer; }
-                                },
                                 _ = &mut deadline => break 'inner,
                             }
                         }
@@ -342,11 +350,6 @@ async fn pty_main_loop(
 
                     if flush_coalesce(&mut coalesce, &out_tx).await { break; }
                 }
-            },
-
-            // ── Client → PTY (keystrokes / resize) ───────────────────────────
-            cmd = cmd_rx.recv() => {
-                if apply_cmd(cmd, &session).await { break; }
             },
 
             // ── Keepalive ping (merged here — avoids a 4th task + ~64 KiB stack)
