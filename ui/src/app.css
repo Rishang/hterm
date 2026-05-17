@@ -138,12 +138,14 @@ html, body {
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column; overflow: hidden;
 }
+.fm-sidebar-wrap.hidden { display: none; }
 
 .fm-resize-handle {
   width: 1px; flex-shrink: 0; cursor: col-resize;
   background: var(--border); transition: background 0.15s;
   position: relative;
 }
+.fm-resize-handle.hidden { display: none; }
 .fm-resize-handle::after {
   content: ''; position: absolute;
   top: 0; bottom: 0; left: -5px; right: -5px;

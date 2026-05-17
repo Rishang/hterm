@@ -35,7 +35,7 @@
 
   // ── File tabs ─────────────────────────────────────────────────────────────
   /**
-   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string }} FileTab
+   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string, skipRefreshOnActivate?: boolean }} FileTab
    */
   /** @type {FileTab[]} */
   let fileTabs = $state([]);
@@ -43,7 +43,7 @@
   /** @param {string} path @param {string} content @param {boolean} isBinary @param {string} error */
   function openFileTab(path, content, isBinary, error) {
     if (fileTabs.find(t => t.id === path)) { activeTab = path; return; }
-    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false });
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, skipRefreshOnActivate: true });
     tabOrder.push(path);
     activeTab = path;
   }
@@ -174,6 +174,10 @@
     if (termTabs.includes(tab)) return;
     const ft = fileTabs.find(t => t.id === tab);
     if (!ft || ft.isBinary || ft.error) return;
+    if (ft.skipRefreshOnActivate) {
+      ft.skipRefreshOnActivate = false;
+      return;
+    }
     // Don't overwrite unsaved edits
     if (ft.editContent !== ft.content) return;
     fetch(`${basePath}/api/tools/call`, {
@@ -295,13 +299,11 @@
 
   <div id="app-body">
     <!-- Sidebar -->
-    {#if showSidebar}
-      <div class="fm-sidebar-wrap" style:width="{sidebarWidth}px">
-        <FileManager bind:fileTabs {activeTab} {openFileTab} />
-      </div>
-      <button class="fm-resize-handle" type="button" aria-label="Resize file explorer"
-        onmousedown={onResizeStart}></button>
-    {/if}
+    <div class="fm-sidebar-wrap" class:hidden={!showSidebar} style:width="{sidebarWidth}px">
+      <FileManager bind:fileTabs {activeTab} {openFileTab} visible={showSidebar} />
+    </div>
+    <button class="fm-resize-handle" class:hidden={!showSidebar} type="button" aria-label="Resize file explorer"
+      onmousedown={onResizeStart}></button>
 
     <!-- Terminal tabs (all mounted, hidden when inactive so state is preserved) -->
     {#each termTabs as tid (tid)}

@@ -1,11 +1,11 @@
 <script>
-  import { onMount } from "svelte";
   import { fileIcon } from './fileIcon.js';
 
-  /** @type {{ fileTabs: any[], activeTab: string, openFileTab: Function }} */
-  let { fileTabs, activeTab, openFileTab } = $props();
+  /** @type {{ fileTabs: any[], activeTab: string, openFileTab: Function, visible?: boolean }} */
+  let { fileTabs, activeTab, openFileTab, visible = true } = $props();
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
+  const SIDEBAR_ROOT_STORAGE_KEY = "hterm:file-manager-root";
 
   /** @param {HTMLElement} node */
   function focus(node) { node.focus(); node.select(); }
@@ -19,6 +19,8 @@
   let tree = $state([]);
   let root = $state("/");
   let error = $state("");
+  /** @type {Map<string, Promise<TreeNode[]>>} */
+  const dirLoadPromises = new Map();
 
   /** @param {TreeNode} a @param {TreeNode} b */
   function sortTreeNodes(a, b) {
@@ -36,6 +38,18 @@
       .sort(sortTreeNodes);
   }
 
+  /** @param {string} path @param {boolean} force @returns {Promise<TreeNode[]>} */
+  function loadDir(path, force = false) {
+    if (force) dirLoadPromises.delete(path);
+    const pending = dirLoadPromises.get(path);
+    if (pending) return pending;
+    const promise = fetchDir(path).finally(() => {
+      if (dirLoadPromises.get(path) === promise) dirLoadPromises.delete(path);
+    });
+    dirLoadPromises.set(path, promise);
+    return promise;
+  }
+
   /** @param {TreeNode[]} fresh @param {TreeNode[]} old @returns {TreeNode[]} */
   function mergeTree(fresh, old) {
     const oldMap = new Map(old.map(n => [n.path, n]));
@@ -46,31 +60,52 @@
     });
   }
 
-  async function loadRoot() {
-    error = "";
-    try {
-      const fresh = await fetchDir(root);
-      tree = mergeTree(fresh, tree);
-      await refreshOpenDirs(tree);
-      tree = tree;
-    } catch (e) { error = String(e); }
-  }
-
-  /** @param {TreeNode[]} nodes */
-  async function refreshOpenDirs(nodes) {
+  /** @param {string} path @param {TreeNode[]} nodes */
+  function findNode(path, nodes = tree) {
     for (const node of nodes) {
-      if (node.is_dir && node.open) {
-        try { node.children = await fetchDir(node.path); node.loaded = true; } catch {}
-        if (node.children?.length) await refreshOpenDirs(node.children);
+      if (node.path === path) return node;
+      if (node.children?.length) {
+        const found = findNode(path, node.children);
+        if (found) return found;
       }
     }
+    return null;
+  }
+
+  async function loadRoot(force = false) {
+    const requestedRoot = root;
+    error = "";
+    try {
+      const fresh = await loadDir(requestedRoot, force);
+      if (root !== requestedRoot) return;
+      tree = mergeTree(fresh, tree);
+    } catch (e) {
+      if (root === requestedRoot) error = String(e);
+    }
+  }
+
+  async function refreshDir(path, force = false) {
+    if (path === root) {
+      await loadRoot(force);
+      return;
+    }
+    const node = findNode(path);
+    if (!node?.is_dir || !node.loaded) return;
+    const fresh = await loadDir(path, force);
+    node.children = mergeTree(fresh, node.children);
+    node.loaded = true;
+    tree = tree;
+  }
+
+  async function refreshDirs(paths, force = false) {
+    await Promise.all([...new Set(paths)].map(path => refreshDir(path, force)));
   }
 
   /** @param {TreeNode} node */
   async function toggleDir(node) {
     if (node.open) { node.open = false; tree = tree; return; }
     if (!node.loaded) {
-      try { node.children = await fetchDir(node.path); node.loaded = true; }
+      try { node.children = await loadDir(node.path); node.loaded = true; }
       catch { node.children = []; node.loaded = true; }
     }
     node.open = true;
@@ -105,9 +140,18 @@
   let pathInput = $state("");
   let committing = false;
 
+  function saveRootPath(path) {
+    try { localStorage.setItem(SIDEBAR_ROOT_STORAGE_KEY, path); } catch {}
+  }
+
+  function savedRootPath() {
+    try { return localStorage.getItem(SIDEBAR_ROOT_STORAGE_KEY) || ""; } catch { return ""; }
+  }
+
   function commitPath() {
     committing = true;
     root = pathInput.trim() || "/";
+    saveRootPath(root);
     editingPath = false;
     loadRoot();
     Promise.resolve().then(() => { committing = false; });
@@ -125,6 +169,7 @@
   let crudError = $state("");
   /** @type {{ action: 'cut'|'copy', path: string, name: string }|null} */
   let clipboard = $state(null);
+  let initialized = false;
 
   // isCommittingRef pattern — prevents onblur from cancelling when Enter fires
   let isCommitting = false;
@@ -163,7 +208,9 @@
     if (!creating || !creating.name.trim()) { creating = null; return; }
     isCommitting = true;
     const name = creating.name.trim();
-    const path = creating.parentPath ? `${creating.parentPath}/${name}` : `${root}/${name}`;    try {
+    const parent = creating.parentPath || root;
+    const path = joinPath(parent, name);
+    try {
       const res = await fetch(`${basePath}/api/files`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -171,7 +218,7 @@
       });
       if (!res.ok) throw new Error(await res.text());
       creating = null;
-      await loadRoot();
+      await refreshDir(parent, true);
     } catch(e) { crudError = String(e); creating = null; }
     finally { isCommitting = false; }
   }
@@ -180,8 +227,8 @@
     if (!renaming || !renaming.name.trim()) { renaming = null; return; }
     isCommitting = true;
     const oldPath = renaming.node.path;
-    const dir = oldPath.substring(0, oldPath.lastIndexOf('/'));
-    const newPath = `${dir}/${renaming.name.trim()}`;
+    const dir = parentPath(oldPath);
+    const newPath = joinPath(dir, renaming.name.trim());
     try {
       const res = await fetch(fileActionUrl(oldPath), {
         method: "PATCH",
@@ -190,18 +237,19 @@
       });
       if (!res.ok) throw new Error(await res.text());
       renaming = null;
-      await loadRoot();
+      await refreshDir(dir, true);
     } catch(e) { crudError = String(e); renaming = null; }
     finally { isCommitting = false; }
   }
 
   async function crudDelete() {
     if (!deleting) return;
+    const dir = parentPath(deleting.path);
     try {
       const res = await fetch(fileActionUrl(deleting.path), { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
       deleting = null;
-      await loadRoot();
+      await refreshDir(dir, true);
     } catch(e) { crudError = String(e); deleting = null; }
   }
 
@@ -209,8 +257,10 @@
     if (!clipboard) return;
     const destDir = targetNode?.is_dir ? targetNode.path : (targetNode ? parentPath(targetNode.path) : root);
     const destPath = joinPath(destDir, clipboard.name);
+    const sourceDir = parentPath(clipboard.path);
+    const wasCut = clipboard.action === 'cut';
     try {
-      if (clipboard.action === 'cut') {
+      if (wasCut) {
         const res = await fetch(fileActionUrl(clipboard.path), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -227,7 +277,7 @@
         });
         if (!res.ok) throw new Error(await res.text());
       }
-      await loadRoot();
+      await refreshDirs(wasCut ? [sourceDir, destDir] : [destDir], true);
     } catch(e) { crudError = String(e); }
     closeCtx();
   }
@@ -260,7 +310,9 @@
 
   async function moveNode(sourceNode, targetNode) {
     if (!sourceNode || !canMoveTo(sourceNode, targetNode)) return;
-    const destPath = joinPath(dropDirFor(targetNode), sourceNode.name);
+    const sourceDir = parentPath(sourceNode.path);
+    const destDir = dropDirFor(targetNode);
+    const destPath = joinPath(destDir, sourceNode.name);
     try {
       const res = await fetch(fileActionUrl(sourceNode.path), {
         method: "PATCH",
@@ -268,7 +320,7 @@
         body: JSON.stringify({ newPath: destPath }),
       });
       if (!res.ok) throw new Error(await res.text());
-      await loadRoot();
+      await refreshDirs([sourceDir, destDir], true);
     } catch (e) { crudError = String(e); }
   }
 
@@ -335,15 +387,23 @@
 
   function onDocClick() { if (ctxMenu) closeCtx(); }
 
-  onMount(async () => {
+  async function initializeRoot() {
     try {
-      const res = await fetch(`${basePath}/api/config`);
-      if (res.ok) { const cfg = await res.json(); if (cfg.cwd) root = cfg.cwd; }
+      const savedRoot = savedRootPath();
+      if (savedRoot) {
+        root = savedRoot;
+      } else {
+        const res = await fetch(`${basePath}/api/config`);
+        if (res.ok) { const cfg = await res.json(); if (cfg.cwd) root = cfg.cwd; }
+      }
     } catch {}
     loadRoot();
-    const onFocus = () => loadRoot();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+  }
+
+  $effect(() => {
+    if (!visible || initialized) return;
+    initialized = true;
+    initializeRoot();
   });
 </script>
 
@@ -398,7 +458,7 @@
     ondragleave={() => { if (dragTargetPath === "__root__") dragTargetPath = null; }}
     ondrop={onTreeDrop}
   >
-    {#each tree as node}
+    {#each tree as node (node.path)}
       {@render NodeRow({ node, depth: 0 })}
     {/each}
     {#if creating && creating.parentPath === null}
@@ -566,7 +626,7 @@
 
   {#if node.is_dir && node.open}
     {#if node.children?.length}
-      {#each node.children as child}
+      {#each node.children as child (child.path)}
         {@render NodeRow({ node: child, depth: depth + 1 })}
       {/each}
     {:else if node.loaded}
