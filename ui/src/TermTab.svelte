@@ -12,7 +12,7 @@
   const MSG_INPUT = 0, MSG_OUTPUT = 1, MSG_RESIZE = 2, MSG_ERROR = 3;
   const RECONNECT_DELAY_MS = 1000;
   const MAX_RECONNECT_DELAY_MS = 15000;
-  const RESIZE_DEBOUNCE_MS = 50;
+  const RESIZE_DEBOUNCE_MS = 400;
   const MAX_MERGED_OUTPUT_BYTES = 256 * 1024;
   const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
 
@@ -40,8 +40,8 @@
   let pendingOutputBytes = 0, rafScheduled = false;
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
+  let termResizeDisposable = null;
   let clipboardReadGranted = false, clipboardWriteGranted = false;
-  let lockedCols = 0;
   let findOpen = $state(false);
   let findQuery = $state("");
   let findCaseSensitive = $state(false);
@@ -112,18 +112,7 @@
   function doFit() {
     if (!active) return;
     if (!term || !fitAddon) return;
-    let proposed;
-    try { proposed = fitAddon.proposeDimensions(); } catch {}
-    if (!proposed) return;
-
-    // Keep columns stable after the initial PTY setup. Forwarding every
-    // width-only panel resize to the shell emits repeated SIGWINCH events,
-    // which can redraw the prompt and make Enter appear to print/duplicate it.
-    const cols = lockedCols || proposed.cols;
-    const rows = proposed.rows;
-    if (!lockedCols) lockedCols = cols;
-    if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
-    sendResize(cols, rows);
+    try { fitAddon.fit(); } catch {}
   }
   function scheduleFit() {
     if (resizeTimer) clearTimeout(resizeTimer);
@@ -142,22 +131,16 @@
     } else { ws.send(new Uint8Array([type])); }
   }
 
-  let lastCols = 0, lastRows = 0;
-  /** @type {number|null} */
-  let resizeSendTimer = null;
+  let lastSentCols = 0, lastSentRows = 0;
   function sendResize(cols, rows) {
-    if (cols === lastCols && rows === lastRows) return;
-    lastCols = cols; lastRows = rows;
-    if (resizeSendTimer) clearTimeout(resizeSendTimer);
-    resizeSendTimer = setTimeout(() => {
-      resizeSendTimer = null;
-      if (ws?.readyState === WebSocket.OPEN) {
-        const buf = new ArrayBuffer(5);
-        const v = new DataView(buf);
-        v.setUint8(0, MSG_RESIZE); v.setUint16(1, lastCols, false); v.setUint16(3, lastRows, false);
-        ws.send(buf);
-      }
-    }, 150);
+    if (cols === lastSentCols && rows === lastSentRows) return;
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    const buf = new ArrayBuffer(5);
+    const v = new DataView(buf);
+    v.setUint8(0, MSG_RESIZE); v.setUint16(1, cols, false); v.setUint16(3, rows, false);
+    ws.send(buf);
+    lastSentCols = cols;
+    lastSentRows = rows;
   }
 
   function scheduleFlush() {
@@ -187,9 +170,9 @@
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       reconnectDelay = RECONNECT_DELAY_MS;
-      lastCols = 0; lastRows = 0;
-      if (resizeSendTimer) { clearTimeout(resizeSendTimer); resizeSendTimer = null; }
+      lastSentCols = 0; lastSentRows = 0;
       doFit();
+      sendResize(term.cols, term.rows);
     };
     ws.onmessage = (e) => {
       if (typeof e.data === "string") return;
@@ -215,8 +198,7 @@
   }
 
 
-  // Re-fit and focus when this tab becomes active while preserving the
-  // locked-column resize behavior above.
+  // Re-fit and focus when this tab becomes active.
   $effect(() => {
     if (active && term) {
       setTimeout(() => {
@@ -244,6 +226,7 @@
     term = new Terminal({
       cursorBlink: true, cursorInactiveStyle: "outline", cursorStyle: "block",
       scrollback: 3000, tabStopWidth: 4, allowProposedApi: true,
+      reflowCursorLine: true,
       theme: {
         background:  "#282c34",
         foreground:  "#abb2bf",
@@ -263,6 +246,7 @@
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
     term.loadAddon(new WebLinksAddon());
+    termResizeDisposable = term.onResize(({ cols, rows }) => sendResize(cols, rows));
     searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => {
       findResultIndex = resultIndex;
       findResultCount = resultCount;
@@ -345,10 +329,10 @@
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (resizeTimer) clearTimeout(resizeTimer);
-    if (resizeSendTimer) clearTimeout(resizeSendTimer);
     if (initialFitTimer) clearTimeout(initialFitTimer);
     if (rafId !== null) cancelAnimationFrame(rafId);
     resizeObserver?.disconnect();
+    termResizeDisposable?.dispose();
     window.removeEventListener("resize", scheduleFit);
     if (window.visualViewport) window.visualViewport.removeEventListener("resize", scheduleFit);
     term?.dispose();
