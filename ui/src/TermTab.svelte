@@ -4,6 +4,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { SearchAddon } from "@xterm/addon-search";
   import { WebLinksAddon } from "@xterm/addon-web-links";
+  import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
 
   /** @type {{ active: boolean, findTrigger?: number }} */
@@ -29,6 +30,7 @@
   let fitAddon;
   /** @type {SearchAddon} */
   let searchAddon;
+  let webglAddon = null;
   /** @type {HTMLInputElement | null} */
   let findInput = $state(null);
   /** @type {WebSocket | null} */
@@ -249,10 +251,20 @@
     });
     fitAddon = new FitAddon();
     searchAddon = new SearchAddon();
-    term.loadAddon(fitAddon);
-    term.loadAddon(searchAddon);
-    term.loadAddon(new WebLinksAddon());
-    termResizeDisposable = term.onResize(({ cols, rows }) => sendResize(cols, rows));
+	    term.loadAddon(fitAddon);
+	    term.loadAddon(searchAddon);
+	    term.loadAddon(new WebLinksAddon());
+	    try {
+	      webglAddon = new WebglAddon();
+	      webglAddon.onContextLoss(() => {
+	        webglAddon?.dispose();
+	        webglAddon = null;
+	      });
+	      term.loadAddon(webglAddon);
+	    } catch {
+	      webglAddon = null;
+	    }
+	    termResizeDisposable = term.onResize(({ cols, rows }) => sendResize(cols, rows));
     searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => {
       findResultIndex = resultIndex;
       findResultCount = resultCount;
@@ -337,9 +349,10 @@
     if (resizeTimer) clearTimeout(resizeTimer);
     if (initialFitTimer) clearTimeout(initialFitTimer);
     if (rafId !== null) cancelAnimationFrame(rafId);
-    resizeObserver?.disconnect();
-    termResizeDisposable?.dispose();
-    window.removeEventListener("resize", scheduleFit);
+	    resizeObserver?.disconnect();
+	    termResizeDisposable?.dispose();
+	    webglAddon?.dispose();
+	    window.removeEventListener("resize", scheduleFit);
     if (window.visualViewport) window.visualViewport.removeEventListener("resize", scheduleFit);
     term?.dispose();
   });

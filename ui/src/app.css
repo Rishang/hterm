@@ -192,6 +192,9 @@ html, body {
   position: relative;
   display: flex; align-items: center; gap: 4px;
   height: 22px;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 22px;
   cursor: pointer; user-select: none;
   font-size: 13px; color: #abb2bf;
   font-family: 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
@@ -242,7 +245,6 @@ html, body {
 .fm-node.is-hidden .fm-ext-badge,
 .fm-node.is-hidden .fm-file-icon-svg {
   opacity: 0.52;
-  filter: saturate(0.6);
 }
 .fm-node.is-hidden .fm-node-name {
   color: #6f7784;
