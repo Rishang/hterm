@@ -24,7 +24,7 @@ const MSG_RESIZE: u8 = 2;   // client → server: terminal resize (cols u16 BE, 
 const PTY_BUF_SIZE: usize = 8 * 1024;
 
 /// Maximum time to accumulate PTY output before flushing a WebSocket frame.
-const COALESCE_WINDOW: Duration = Duration::from_millis(4);
+const COALESCE_WINDOW: Duration = Duration::from_millis(1);
 
 /// Flush immediately once coalesced data reaches this size.
 const MAX_COALESCE_SIZE: usize = 16 * 1024;

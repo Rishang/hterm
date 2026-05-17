@@ -13,6 +13,7 @@
   const RECONNECT_DELAY_MS = 1000;
   const MAX_RECONNECT_DELAY_MS = 15000;
   const RESIZE_DEBOUNCE_MS = 400;
+  const INTERACTIVE_OUTPUT_BYTES = 8 * 1024;
   const MAX_MERGED_OUTPUT_BYTES = 256 * 1024;
   const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
 
@@ -178,9 +179,14 @@
       if (typeof e.data === "string") return;
       const data = new Uint8Array(e.data);
       if (!data.length) return;
-      if (data[0] === MSG_OUTPUT) {
-        pendingOutput.push(data.subarray(1));
-        pendingOutputBytes += data.length - 1;
+	      if (data[0] === MSG_OUTPUT) {
+	        const output = data.subarray(1);
+	        if (!rafScheduled && pendingOutputBytes === 0 && output.length <= INTERACTIVE_OUTPUT_BYTES) {
+	          term.write(output);
+	          return;
+	        }
+	        pendingOutput.push(output);
+	        pendingOutputBytes += output.length;
         if (pendingOutputBytes >= MAX_PENDING_OUTPUT_BYTES) {
           if (rafId !== null) cancelAnimationFrame(rafId);
           flushOutput();
