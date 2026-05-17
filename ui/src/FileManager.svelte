@@ -20,12 +20,20 @@
   let root = $state("/");
   let error = $state("");
 
+  /** @param {TreeNode} a @param {TreeNode} b */
+  function sortTreeNodes(a, b) {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+  }
+
   /** @param {string} path @returns {Promise<TreeNode[]>} */
   async function fetchDir(path) {
     const res = await fetch(`${basePath}/api/files?path=${encodeURIComponent(path)}`);
     if (!res.ok) throw new Error(await res.text());
     const raw = await res.json();
-    return raw.map(e => ({ ...e, children: [], loaded: false, open: false }));
+    return raw
+      .map(e => ({ ...e, children: [], loaded: false, open: false }))
+      .sort(sortTreeNodes);
   }
 
   /** @param {TreeNode[]} fresh @param {TreeNode[]} old @returns {TreeNode[]} */

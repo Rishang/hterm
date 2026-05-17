@@ -49,8 +49,6 @@ pub async fn list_files_handler(
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            // skip hidden files
-            if name.starts_with('.') { return None; }
             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
             let full = format!("{}/{}", dir.trim_end_matches('/'), name);
             Some(FileEntry { name, path: full, is_dir })

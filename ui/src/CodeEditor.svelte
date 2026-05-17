@@ -6,10 +6,16 @@
     ts:     () => import("@codemirror/lang-javascript").then(m => m.javascript({ typescript: true })),
     tsx:    () => import("@codemirror/lang-javascript").then(m => m.javascript({ jsx: true, typescript: true })),
     html:   () => import("@codemirror/lang-html").then(m => m.html()),
+    htm:    () => import("@codemirror/lang-html").then(m => m.html()),
+    tpl:    () => import("@codemirror/lang-html").then(m => m.html()),
     svelte: () => import("@codemirror/lang-html").then(m => m.html()),
+    vue:    () => import("@codemirror/lang-vue").then(m => m.vue()),
+    angular:() => import("@codemirror/lang-angular").then(m => m.angular()),
     css:    () => import("@codemirror/lang-css").then(m => m.css()),
     scss:   () => import("@codemirror/lang-css").then(m => m.css()),
     json:   () => import("@codemirror/lang-json").then(m => m.json()),
+    php:    () => import("@codemirror/lang-php").then(m => m.php()),
+    phtml:  () => import("@codemirror/lang-php").then(m => m.php()),
     py:     () => import("@codemirror/lang-python").then(m => m.python()),
     rs:     () => import("@codemirror/lang-rust").then(m => m.rust()),
     cpp:    () => import("@codemirror/lang-cpp").then(m => m.cpp()),
@@ -21,6 +27,10 @@
     yaml:   () => import("@codemirror/lang-yaml").then(m => m.yaml()),
     yml:    () => import("@codemirror/lang-yaml").then(m => m.yaml()),
     go:     () => import("@codemirror/lang-go").then(m => m.go()),
+    lezer:  () => import("@codemirror/lang-lezer").then(m => m.lezer()),
+    grammar:() => import("@codemirror/lang-lezer").then(m => m.lezer()),
+    wast:   () => import("@codemirror/lang-wast").then(m => m.wast()),
+    wat:    () => import("@codemirror/lang-wast").then(m => m.wast()),
     toml:   () => Promise.all([import("@codemirror/legacy-modes/mode/toml"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.toml)),
     sh:     () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
     bash:   () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
@@ -95,8 +105,6 @@
     textile:() => Promise.all([import("@codemirror/legacy-modes/mode/textile"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.textile)),
     sparql: () => Promise.all([import("@codemirror/legacy-modes/mode/sparql"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sparql)),
     ttl:    () => Promise.all([import("@codemirror/legacy-modes/mode/turtle"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.turtle)),
-    wast:   () => Promise.all([import("@codemirror/legacy-modes/mode/wast"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.wast)),
-    wat:    () => Promise.all([import("@codemirror/legacy-modes/mode/wast"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.wast)),
     hx:     () => Promise.all([import("@codemirror/legacy-modes/mode/haxe"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.haxe)),
     nsi:    () => Promise.all([import("@codemirror/legacy-modes/mode/nsis"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.nsis)),
     nsis:   () => Promise.all([import("@codemirror/legacy-modes/mode/nsis"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.nsis)),
@@ -129,8 +137,11 @@
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from "@codemirror/language";
   import { search, searchKeymap, findNext, findPrevious, selectMatches, getSearchQuery, setSearchQuery, SearchQuery, closeSearchPanel, openSearchPanel, replaceNext, replaceAll } from "@codemirror/search";
+  import { autocompletion, completeAnyWord } from "@codemirror/autocomplete";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { showMinimap } from "@replit/codemirror-minimap";
+  import { dockerCompletionSource, isDockerAutocompleteFile } from "./autocomplete/docker.js";
+  import { goTemplateCompletionSource, isGoTemplateFile } from "./autocomplete/gotemplate.js";
 
   /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, searchTrigger?: number, onchange?: (v: string) => void, onsave?: () => void }} */
   let { path, value, readonly = false, lang = "", searchTrigger = 0, onchange, onsave } = $props();
@@ -250,6 +261,14 @@
     const isDockerfile = fname === 'dockerfile' || fname.startsWith('dockerfile.');
     const ext = lang || (isDockerfile ? "dockerfile" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? ""));
     const langExt = langMap[ext] ? await langMap[ext]() : [];
+    const customCompletions = [
+      isDockerAutocompleteFile(path, ext) ? dockerCompletionSource(path, ext) : null,
+      isGoTemplateFile(path, ext) ? goTemplateCompletionSource : null,
+    ].filter(Boolean);
+    const completionData = [
+      ...customCompletions.map(source => ({ autocomplete: source })),
+      { autocomplete: completeAnyWord },
+    ];
 
     const extensions = [
       oneDark,
@@ -259,6 +278,7 @@
       foldGutter(),
       EditorView.lineWrapping,
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      EditorState.languageData.of(() => completionData),
       ...(readonly
         ? [EditorState.readOnly.of(true)]
         : [
@@ -270,6 +290,10 @@
             ]),
           ]
       ),
+      autocompletion({
+        activateOnTyping: !readonly,
+        maxRenderedOptions: 80,
+      }),
       search({ top: false, createPanel: createSearchPanel }),
       showMinimap.of({
         create() { const dom = document.createElement("div"); return { dom }; },
@@ -280,7 +304,7 @@
         if (!readonly && u.docChanged && onchange) onchange(u.state.doc.toString());
       }),
       EditorView.theme({
-        "&": { height: "100%", fontSize: "13px" },
+        "&": { height: "100%", fontSize: "14px" },
         ".cm-scroller": {
           fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
           overflow: "auto",
