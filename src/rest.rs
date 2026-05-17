@@ -7,10 +7,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use crate::ws::AppState;
 use crate::tools;
+use crate::ws::AppState;
 
 #[derive(Deserialize)]
 pub struct ToolCallRequest {
@@ -35,9 +38,9 @@ pub async fn list_files_handler(
     Query(q): Query<FilesQuery>,
 ) -> impl IntoResponse {
     let dir = q.path.unwrap_or_else(|| "/".to_string());
-    let path = std::path::Path::new(&dir);
+    let path = Path::new(&dir);
 
-    let rd = match std::fs::read_dir(path) {
+    let mut rd = match tokio::fs::read_dir(path).await {
         Ok(rd) => rd,
         Err(e) => {
             let err = serde_json::json!({ "error": e.to_string() });
@@ -45,20 +48,24 @@ pub async fn list_files_handler(
         }
     };
 
-    let mut entries: Vec<FileEntry> = rd
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let full = format!("{}/{}", dir.trim_end_matches('/'), name);
-            Some(FileEntry { name, path: full, is_dir })
-        })
-        .collect();
+    let mut entries = Vec::new();
+    loop {
+        let entry = match rd.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(e) => {
+                let err = serde_json::json!({ "error": e.to_string() });
+                return (StatusCode::BAD_REQUEST, Json(err)).into_response();
+            }
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+        let path = entry.path().to_string_lossy().to_string();
+        entries.push(FileEntry { name, path, is_dir });
+    }
 
     // dirs first, then alphabetical
-    entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase()));
 
     (StatusCode::OK, Json(entries)).into_response()
 }
@@ -114,11 +121,19 @@ fn bad(msg: impl ToString) -> axum::response::Response {
     (StatusCode::BAD_REQUEST, msg.to_string()).into_response()
 }
 
-fn safe_path(p: &str) -> Option<std::path::PathBuf> {
-    let p = std::path::Path::new(p);
+fn readonly() -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        "File write operations are disabled (hterm is running in read-only mode).",
+    )
+        .into_response()
+}
+
+fn safe_path(p: &str) -> Option<PathBuf> {
+    let p = Path::new(p);
     // must be absolute and must not escape via ..
     if !p.is_absolute() { return None; }
-    let clean = p.components().fold(std::path::PathBuf::new(), |mut acc, c| {
+    let clean = p.components().fold(PathBuf::new(), |mut acc, c| {
         match c {
             std::path::Component::ParentDir => { acc.pop(); acc }
             std::path::Component::Normal(n) => { acc.push(n); acc }
@@ -137,18 +152,23 @@ pub async fn create_file_handler(
     if !tools::check_auth(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    if !state.config.writable {
+        return readonly();
+    }
 
     let Some(path) = safe_path(&req.path) else { return bad("invalid path"); };
     if req.kind == "folder" {
-        match std::fs::create_dir_all(&path) {
+        match tokio::fs::create_dir_all(&path).await {
             Ok(_)  => StatusCode::CREATED.into_response(),
             Err(e) => bad(e),
         }
     } else {
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                return bad(e);
+            }
         }
-        match std::fs::OpenOptions::new().create_new(true).write(true).open(&path) {
+        match tokio::fs::OpenOptions::new().create_new(true).write(true).open(&path).await {
             Ok(_)  => StatusCode::CREATED.into_response(),
             Err(e) => bad(e),
         }
@@ -164,14 +184,19 @@ pub async fn rename_file_handler(
     if !tools::check_auth(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    if !state.config.writable {
+        return readonly();
+    }
 
     let src = format!("/{}", tail);
     let Some(src_path) = safe_path(&src) else { return bad("invalid source path"); };
     let Some(dst_path) = safe_path(&req.new_path) else { return bad("invalid dest path"); };
     if let Some(parent) = dst_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            return bad(e);
+        }
     }
-    match std::fs::rename(&src_path, &dst_path) {
+    match tokio::fs::rename(&src_path, &dst_path).await {
         Ok(_)  => StatusCode::OK.into_response(),
         Err(e) => bad(e),
     }
@@ -185,14 +210,22 @@ pub async fn delete_file_handler(
     if !tools::check_auth(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    if !state.config.writable {
+        return readonly();
+    }
 
     let p = format!("/{}", tail);
     let Some(path) = safe_path(&p) else { return bad("invalid path"); };
-    let result = if path.is_dir() {
-        std::fs::remove_dir_all(&path)
-    } else {
-        std::fs::remove_file(&path)
-    };
+    let result = tokio::task::spawn_blocking(move || {
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        }
+    })
+    .await
+    .map_err(|e| std::io::Error::other(e.to_string()))
+    .and_then(|result| result);
     match result {
         Ok(_)  => StatusCode::NO_CONTENT.into_response(),
         Err(e) => bad(e),
@@ -220,22 +253,35 @@ pub async fn copy_file_handler(
     if !tools::check_auth(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    if !state.config.writable {
+        return readonly();
+    }
 
     let Some(src) = safe_path(&req.src) else { return bad("invalid src path"); };
     let Some(dst) = safe_path(&req.dst) else { return bad("invalid dst path"); };
-    if src.is_dir() && (dst == src || dst.starts_with(&src)) {
+    let src_meta = match tokio::fs::metadata(&src).await {
+        Ok(meta) => meta,
+        Err(e) => return bad(e),
+    };
+    if src_meta.is_dir() && (dst == src || dst.starts_with(&src)) {
         return bad("cannot copy a directory into itself");
     }
     if let Some(parent) = dst.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            return bad(e);
+        }
     }
-    match copy_recursive(&src, &dst) {
+    let result = tokio::task::spawn_blocking(move || copy_recursive(&src, &dst))
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))
+        .and_then(|result| result);
+    match result {
         Ok(_)  => StatusCode::CREATED.into_response(),
         Err(e) => bad(e),
     }
 }
 
-fn copy_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     if src.is_dir() {
         std::fs::create_dir_all(dst)?;
         for entry in std::fs::read_dir(src)? {

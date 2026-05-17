@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from "svelte";
   import FileManager from "./FileManager.svelte";
   import CodeEditor, { supportedLangs } from "./CodeEditor.svelte";
   import TermTab from "./TermTab.svelte";
@@ -71,6 +72,32 @@
 
   function isTermTab(id) { return termTabs.includes(id); }
   function openActiveSearch() { searchTrigger++; }
+  function switchTab(delta) {
+    if (tabOrder.length <= 1) return;
+    const idx = tabOrder.indexOf(activeTab);
+    const nextIdx = idx === -1
+      ? 0
+      : (idx + delta + tabOrder.length) % tabOrder.length;
+    activeTab = tabOrder[nextIdx];
+  }
+  function onGlobalKeydown(e) {
+    const nextByPage = e.ctrlKey && !e.metaKey && !e.altKey && e.key === "PageDown";
+    const prevByPage = e.ctrlKey && !e.metaKey && !e.altKey && e.key === "PageUp";
+    const nextByAltPage = e.altKey && !e.ctrlKey && !e.metaKey && e.key === "PageDown";
+    const prevByAltPage = e.altKey && !e.ctrlKey && !e.metaKey && e.key === "PageUp";
+    const nextByBracket = e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "]";
+    const prevByBracket = e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "[";
+
+    if (nextByPage || nextByAltPage || nextByBracket) {
+      e.preventDefault();
+      e.stopPropagation();
+      switchTab(1);
+    } else if (prevByPage || prevByAltPage || prevByBracket) {
+      e.preventDefault();
+      e.stopPropagation();
+      switchTab(-1);
+    }
+  }
   function tabAfterClose(id) {
     const remaining = tabOrder.filter(t => t !== id);
     const idx = tabOrder.indexOf(id);
@@ -161,6 +188,12 @@
         ft.editContent = text;
       }
     }).catch(() => {});
+  });
+
+  onMount(() => {
+    // Capture before xterm/CodeMirror can consume tab-switch shortcuts.
+    window.addEventListener("keydown", onGlobalKeydown, { capture: true });
+    return () => window.removeEventListener("keydown", onGlobalKeydown, { capture: true });
   });
 </script>
 

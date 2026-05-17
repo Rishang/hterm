@@ -12,6 +12,9 @@
   --border:               #1d1f23;
   --status-connected:     #98c379;
   --status-disconnected:  #e06c75;
+  --scrollbar-size:       10px;
+  --scrollbar-thumb:      rgba(92,99,112,0.96);
+  --scrollbar-thumb-hover: rgba(112,120,132,0.98);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; border: none; }
@@ -93,12 +96,12 @@ html, body {
 .xterm-scrollable-element {
   overflow-x: hidden !important; overflow-y: auto !important;
   background: transparent !important;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 .xterm-scrollable-element::-webkit-scrollbar,
 .xterm-viewport::-webkit-scrollbar {
-  width: 3px; height: 3px;
+  width: var(--scrollbar-size); height: var(--scrollbar-size);
 }
 .xterm-scrollable-element::-webkit-scrollbar-track,
 .xterm-viewport::-webkit-scrollbar-track {
@@ -106,14 +109,20 @@ html, body {
 }
 .xterm-scrollable-element::-webkit-scrollbar-thumb,
 .xterm-viewport::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 2px;
+  background: var(--scrollbar-thumb);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+.xterm-scrollable-element::-webkit-scrollbar-thumb:hover,
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 .xterm .xterm-scrollable-element > .scrollbar.vertical {
   background: transparent !important;
-  width: 3px !important;
-  min-width: 3px !important;
-  max-width: 3px !important;
+  width: var(--scrollbar-size) !important;
+  min-width: var(--scrollbar-size) !important;
+  max-width: var(--scrollbar-size) !important;
   left: auto !important;
   opacity: 0.85 !important;
   right: 0 !important;
@@ -127,8 +136,15 @@ html, body {
   height: 0 !important;
 }
 .xterm .xterm-scrollable-element > .scrollbar .slider {
-  background: var(--border) !important;
-  border-radius: 2px !important;
+  background: var(--scrollbar-thumb) !important;
+  border: 3px solid transparent !important;
+  background-clip: padding-box !important;
+  border-radius: 999px !important;
+  box-sizing: border-box !important;
+}
+.xterm .xterm-scrollable-element > .scrollbar .slider:hover {
+  background: var(--scrollbar-thumb-hover) !important;
+  background-clip: padding-box !important;
 }
 .xterm-screen {
   position: relative;
@@ -139,7 +155,7 @@ html, body {
 }
 .xterm-viewport {
   background-color: transparent !important;
-  scrollbar-color: var(--border) transparent; scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent; scrollbar-width: thin;
   overflow-x: hidden !important; overflow-y: auto !important;
 }
 
@@ -259,6 +275,26 @@ html, body {
 
 .fm-node-name { overflow: hidden; text-overflow: ellipsis; flex: 1; color: #abb2bf; }
 .fm-node-name-active { color: #e6e6e6; }
+.fm-node.is-hidden .fm-folder-icon,
+.fm-node.is-hidden .fm-ext-badge,
+.fm-node.is-hidden .fm-file-icon-svg {
+  opacity: 0.52;
+  filter: saturate(0.6);
+}
+.fm-node.is-hidden .fm-node-name {
+  color: #6f7784;
+}
+.fm-node.is-hidden .fm-node-name-active {
+  color: #9aa3ad;
+}
+.fm-node.is-hidden:hover .fm-folder-icon,
+.fm-node.is-hidden:hover .fm-ext-badge,
+.fm-node.is-hidden:hover .fm-file-icon-svg {
+  opacity: 0.72;
+}
+.fm-node.is-hidden:hover .fm-node-name {
+  color: #8c96a3;
+}
 
 /* File content area */
 .tab-sidebar-btn,

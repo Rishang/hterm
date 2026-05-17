@@ -417,7 +417,7 @@ paths:
   /api/files:
     get:
       summary: List directory contents
-      description: Returns files and directories at the given path, sorted dirs-first. Hidden files (dotfiles) are excluded.
+      description: Returns files and directories at the given path, sorted dirs-first.
       tags:
         - terminal
       parameters:
@@ -485,6 +485,8 @@ paths:
                 type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/files/copy:
     post:
@@ -519,6 +521,8 @@ paths:
                 type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/files/{path}:
     patch:
@@ -556,6 +560,8 @@ paths:
                 type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     delete:
       summary: Delete a file or directory
       description: Delete the file or directory identified by the URL-encoded path. Directories are removed recursively.
@@ -583,6 +589,8 @@ paths:
                 type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /openapi.json:
     get:
@@ -829,6 +837,13 @@ components:
           schema:
             type: string
             example: "Unauthorized"
+    Forbidden:
+      description: File write operations are disabled in read-only mode
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "File write operations are disabled (hterm is running in read-only mode)."
 
   securitySchemes:
     BasicAuth:

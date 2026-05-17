@@ -480,6 +480,7 @@
   {@const isCtxSelected = ctxMenu?.node?.path === node.path}
   {@const isRenaming = renaming?.node.path === node.path}
   {@const isCut = clipboard?.action === 'cut' && clipboard.path === node.path}
+  {@const isHidden = node.name.startsWith('.')}
   {@const isDragging = draggingNode?.path === node.path}
   {@const isDropTarget = dragTargetPath === node.path && draggingNode?.path !== node.path}
   {@const isInvalidDrop = isDropTarget && draggingNode && !canMoveTo(draggingNode, node)}
@@ -488,6 +489,7 @@
     class:is-active={isActive}
     class:is-ctx={isCtxSelected && !isActive}
     class:is-dragging={isDragging}
+    class:is-hidden={isHidden}
     class:is-drop-target={isDropTarget && !isInvalidDrop}
     class:is-drop-invalid={isInvalidDrop}
     style:padding-left="{depth * 16 + 4}px"
