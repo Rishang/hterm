@@ -13,7 +13,6 @@
   const MSG_INPUT = 0, MSG_OUTPUT = 1, MSG_RESIZE = 2, MSG_ERROR = 3;
   const RECONNECT_DELAY_MS = 1000;
   const MAX_RECONNECT_DELAY_MS = 15000;
-  const RESIZE_DEBOUNCE_MS = 400;
   const INTERACTIVE_OUTPUT_BYTES = 8 * 1024;
   const MAX_MERGED_OUTPUT_BYTES = 256 * 1024;
   const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
@@ -37,13 +36,13 @@
   let ws = null;
   let reconnectDelay = RECONNECT_DELAY_MS;
   /** @type {number|null} */
-  let reconnectTimer = null, resizeTimer = null, initialFitTimer = null, rafId = null;
+  let reconnectTimer = null, initialFitTimer = null, rafId = null, fitRafId = null, ptyResizeTimer = null;
   /** @type {Uint8Array[]} */
   let pendingOutput = [];
   let pendingOutputBytes = 0, rafScheduled = false;
+  let lastPtyResizeAt = 0;
   /** @type {ResizeObserver|null} */
   let resizeObserver = null;
-  let termResizeDisposable = null;
   let clipboardReadGranted = false, clipboardWriteGranted = false;
   let findOpen = $state(false);
   let findQuery = $state("");
@@ -115,11 +114,21 @@
   function doFit() {
     if (!active) return;
     if (!term || !fitAddon) return;
-    try { fitAddon.fit(); } catch {}
+    try {
+      const dims = fitAddon.proposeDimensions();
+      if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
+      if (dims.cols <= 0 || dims.rows <= 0) return;
+      if (term.cols === dims.cols && term.rows === dims.rows) return;
+      term.resize(dims.cols, dims.rows);
+      schedulePtyResize(dims.cols, dims.rows);
+    } catch {}
   }
   function scheduleFit() {
-    if (resizeTimer) clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { doFit(); resizeTimer = null; }, RESIZE_DEBOUNCE_MS);
+    if (fitRafId !== null) return;
+    fitRafId = requestAnimationFrame(() => {
+      fitRafId = null;
+      doFit();
+    });
   }
 
   function sendBinary(type, payload) {
@@ -144,6 +153,25 @@
     ws.send(buf);
     lastSentCols = cols;
     lastSentRows = rows;
+  }
+  function schedulePtyResize(cols, rows) {
+    const now = performance.now();
+    const wait = Math.max(0, 80 - (now - lastPtyResizeAt));
+    if (wait === 0) {
+      if (ptyResizeTimer) {
+        clearTimeout(ptyResizeTimer);
+        ptyResizeTimer = null;
+      }
+      lastPtyResizeAt = now;
+      sendResize(cols, rows);
+      return;
+    }
+    if (ptyResizeTimer) clearTimeout(ptyResizeTimer);
+    ptyResizeTimer = setTimeout(() => {
+      ptyResizeTimer = null;
+      lastPtyResizeAt = performance.now();
+      sendResize(cols, rows);
+    }, wait);
   }
 
   function scheduleFlush() {
@@ -251,25 +279,24 @@
     });
     fitAddon = new FitAddon();
     searchAddon = new SearchAddon();
-	    term.loadAddon(fitAddon);
-	    term.loadAddon(searchAddon);
-	    term.loadAddon(new WebLinksAddon());
-	    try {
-	      webglAddon = new WebglAddon();
-	      webglAddon.onContextLoss(() => {
-	        webglAddon?.dispose();
-	        webglAddon = null;
-	      });
-	      term.loadAddon(webglAddon);
-	    } catch {
-	      webglAddon = null;
-	    }
-	    termResizeDisposable = term.onResize(({ cols, rows }) => sendResize(cols, rows));
+    term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
+    term.loadAddon(new WebLinksAddon());
     searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => {
       findResultIndex = resultIndex;
       findResultCount = resultCount;
     });
     term.open(container);
+    try {
+      webglAddon = new WebglAddon();
+      webglAddon.onContextLoss(() => {
+        webglAddon?.dispose();
+        webglAddon = null;
+      });
+      term.loadAddon(webglAddon);
+    } catch {
+      webglAddon = null;
+    }
 
     window.addEventListener("resize", scheduleFit);
     if (window.visualViewport) window.visualViewport.addEventListener("resize", scheduleFit);
@@ -346,13 +373,13 @@
   onDestroy(() => {
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (resizeTimer) clearTimeout(resizeTimer);
+    if (ptyResizeTimer) clearTimeout(ptyResizeTimer);
     if (initialFitTimer) clearTimeout(initialFitTimer);
     if (rafId !== null) cancelAnimationFrame(rafId);
-	    resizeObserver?.disconnect();
-	    termResizeDisposable?.dispose();
-	    webglAddon?.dispose();
-	    window.removeEventListener("resize", scheduleFit);
+    if (fitRafId !== null) cancelAnimationFrame(fitRafId);
+    resizeObserver?.disconnect();
+    webglAddon?.dispose();
+    window.removeEventListener("resize", scheduleFit);
     if (window.visualViewport) window.visualViewport.removeEventListener("resize", scheduleFit);
     term?.dispose();
   });

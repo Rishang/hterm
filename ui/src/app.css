@@ -93,19 +93,13 @@ html, body {
 .term-wrap.hidden { display: none; }
 .xterm { width: 100% !important; height: 100% !important; overflow: hidden; background: #282c34; }
 .xterm-rows { background: #282c34; }
-.xterm-scrollable-element {
-  overflow-x: hidden !important; overflow-y: hidden !important;
-  background: transparent !important;
-  scrollbar-width: none;
-}
-.xterm-scrollable-element::-webkit-scrollbar,
 .xterm-viewport::-webkit-scrollbar {
   width: 0; height: 0; display: none;
 }
-.xterm .xterm-scrollable-element > .scrollbar.vertical,
-.xterm .xterm-scrollable-element > .scrollbar.horizontal {
-  display: none !important;
-  width: 0 !important; height: 0 !important;
+.xterm .scrollbar.vertical,
+.xterm .scrollbar.horizontal {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 .xterm-screen {
   position: relative;
@@ -117,7 +111,7 @@ html, body {
 .xterm-viewport {
   background-color: transparent !important;
   scrollbar-width: none;
-  overflow-x: hidden !important; overflow-y: auto !important;
+  overflow-x: hidden !important; overflow-y: scroll !important;
 }
 
 /* ── File view (sidebar + content) ────────────────────────── */
