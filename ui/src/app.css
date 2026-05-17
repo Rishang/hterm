@@ -96,55 +96,16 @@ html, body {
 .xterm-scrollable-element {
   overflow-x: hidden !important; overflow-y: auto !important;
   background: transparent !important;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 .xterm-scrollable-element::-webkit-scrollbar,
 .xterm-viewport::-webkit-scrollbar {
-  width: var(--scrollbar-size); height: var(--scrollbar-size);
+  width: 0; height: 0; display: none;
 }
-.xterm-scrollable-element::-webkit-scrollbar-track,
-.xterm-viewport::-webkit-scrollbar-track {
-  background: transparent;
-}
-.xterm-scrollable-element::-webkit-scrollbar-thumb,
-.xterm-viewport::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border: 3px solid transparent;
-  background-clip: padding-box;
-  border-radius: 999px;
-}
-.xterm-scrollable-element::-webkit-scrollbar-thumb:hover,
-.xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-}
-.xterm .xterm-scrollable-element > .scrollbar.vertical {
-  background: transparent !important;
-  width: var(--scrollbar-size) !important;
-  min-width: var(--scrollbar-size) !important;
-  max-width: var(--scrollbar-size) !important;
-  left: auto !important;
-  opacity: 0.85 !important;
-  right: 0 !important;
-}
-.xterm .xterm-scrollable-element > .scrollbar.vertical.invisible,
-.xterm .xterm-scrollable-element > .scrollbar.vertical.invisible.fade {
-  opacity: 0.85 !important;
-}
+.xterm .xterm-scrollable-element > .scrollbar.vertical,
 .xterm .xterm-scrollable-element > .scrollbar.horizontal {
   display: none !important;
-  height: 0 !important;
-}
-.xterm .xterm-scrollable-element > .scrollbar .slider {
-  background: var(--scrollbar-thumb) !important;
-  border: 3px solid transparent !important;
-  background-clip: padding-box !important;
-  border-radius: 999px !important;
-  box-sizing: border-box !important;
-}
-.xterm .xterm-scrollable-element > .scrollbar .slider:hover {
-  background: var(--scrollbar-thumb-hover) !important;
-  background-clip: padding-box !important;
+  width: 0 !important; height: 0 !important;
 }
 .xterm-screen {
   position: relative;
@@ -155,7 +116,7 @@ html, body {
 }
 .xterm-viewport {
   background-color: transparent !important;
-  scrollbar-color: var(--scrollbar-thumb) transparent; scrollbar-width: thin;
+  scrollbar-width: none;
   overflow-x: hidden !important; overflow-y: auto !important;
 }
 
