@@ -477,9 +477,13 @@ html, body {
 /* ── Custom search panel (VS Code floating style) ──────────────────────────── */
 .cm-panels-bottom {
   position: absolute !important;
-  top: 0 !important; right: 0 !important;
+  top: 0 !important; right: 0 !important; bottom: auto !important; left: auto !important;
   background: var(--transparent) !important; border: none !important;
-  z-index: 20 !important; width: fit-content !important;
+  z-index: 20 !important; width: max-content !important;
+  max-width: 100% !important;
+}
+.cm-panels-bottom > .csb {
+  margin-left: auto;
 }
 .csb {
   display: inline-flex; align-items: stretch; gap: 0;

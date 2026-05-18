@@ -132,6 +132,7 @@
 </script>
 <script>
   import { onMount, onDestroy } from "svelte";
+  import { mount, unmount } from "svelte";
   import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
   import { EditorState } from "@codemirror/state";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -140,6 +141,7 @@
   import { autocompletion, completeAnyWord } from "@codemirror/autocomplete";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { showMinimap } from "@replit/codemirror-minimap";
+  import FindBar from "./FindBar.svelte";
   import { dockerCompletionSource, isDockerAutocompleteFile } from "./autocomplete/docker.js";
   import { goTemplateCompletionSource, isGoTemplateFile } from "./autocomplete/gotemplate.js";
 
@@ -156,103 +158,77 @@
   /** @param {import("@codemirror/view").EditorView} v */
   function createSearchPanel(v) {
     const dom = document.createElement("div");
-    dom.className = "csb";
     dom.setAttribute("onkeydown", ""); // prevent CM from stealing
 
-    // ── expand toggle (›) ──────────────────────────────────────────────────
-    const expandBtn = document.createElement("button");
-    expandBtn.className = "csb-expand"; expandBtn.textContent = "›"; expandBtn.title = "Toggle Replace";
+    let searchValue = "";
+    let replaceValue = "";
+    let caseSensitive = false;
+    let wholeWord = false;
+    let regexp = false;
     let replaceVisible = false;
-
-    // ── find row ───────────────────────────────────────────────────────────
-    const findRow = document.createElement("div"); findRow.className = "csb-row";
-    const findInput = document.createElement("input");
-    findInput.placeholder = "Find"; findInput.className = "csb-input";
-    findInput.setAttribute("main-field", "true");
-
-    const matchCount = document.createElement("span"); matchCount.className = "csb-count";
-
-    const btnCase = mkToggle("Aa", "Match Case");
-    const btnWord = mkToggle("ab̲", "Whole Word");
-    const btnRe   = mkToggle(".*", "Use Regexp");
-    const btnPrev = mkIconBtn("↑", "Previous Match", () => findPrevious(v));
-    const btnNext = mkIconBtn("↓", "Next Match",     () => findNext(v));
-    const btnAll  = mkIconBtn("≡", "Select All",     () => selectMatches(v));
-    const btnClose= mkIconBtn("×", "Close",          () => closeSearchPanel(v));
-    btnClose.className = "csb-close";
-
-    findRow.append(findInput, matchCount, btnCase, btnWord, btnRe, btnPrev, btnNext, btnAll, btnClose);
-
-    // ── replace row ────────────────────────────────────────────────────────
-    const replaceRow = document.createElement("div"); replaceRow.className = "csb-row csb-replace-row";
-    replaceRow.style.display = "none";
-    const replaceInput = document.createElement("input");
-    replaceInput.placeholder = "Replace"; replaceInput.className = "csb-input";
-    const btnReplace    = mkIconBtn("AB→", "Replace",     () => replaceNext(v));
-    const btnReplaceAll = mkIconBtn("AB→→", "Replace All", () => replaceAll(v));
-    replaceRow.append(replaceInput, btnReplace, btnReplaceAll);
-
-    expandBtn.addEventListener("click", () => {
-      replaceVisible = !replaceVisible;
-      replaceRow.style.display = replaceVisible ? "flex" : "none";
-      expandBtn.style.transform = replaceVisible ? "rotate(90deg)" : "";
-    });
-
-    dom.append(expandBtn, Object.assign(document.createElement("div"), {
-      className: "csb-main",
-      append: function(...args) { this.append(...args); return this; }
-    }));
-    // simpler: just append directly
-    dom.innerHTML = ""; // reset
-    const inner = document.createElement("div"); inner.className = "csb-inner";
-    inner.append(findRow, replaceRow);
-    dom.append(expandBtn, inner);
 
     function sync() {
       const q = new SearchQuery({
-        search: findInput.value,
-        replace: replaceInput.value,
-        caseSensitive: btnCase.dataset.on === "1",
-        wholeWord: btnWord.dataset.on === "1",
-        regexp: btnRe.dataset.on === "1",
+        search: searchValue,
+        replace: replaceValue,
+        caseSensitive,
+        wholeWord,
+        regexp,
       });
       v.dispatch({ effects: setSearchQuery.of(q) });
     }
 
-    findInput.addEventListener("input", sync);
-    replaceInput.addEventListener("input", sync);
-    findInput.addEventListener("keydown", e => {
+    function onSearchKeydown(e) {
       if (e.key === "Enter") { e.shiftKey ? findPrevious(v) : findNext(v); e.preventDefault(); }
       if (e.key === "Escape") { closeSearchPanel(v); }
+    }
+
+    const panel = mount(FindBar, {
+      target: dom,
+      props: {
+        value: searchValue,
+        replaceValue,
+        caseSensitive,
+        wholeWord,
+        regexp,
+        replaceVisible,
+        readonly,
+        showWord: true,
+        showRegexp: true,
+        showSelectAll: true,
+        onSearchInput: (next) => { searchValue = next; sync(); },
+        onReplaceInput: (next) => { replaceValue = next; sync(); },
+        onKeydown: onSearchKeydown,
+        onPrevious: () => findPrevious(v),
+        onNext: () => findNext(v),
+        onClose: () => closeSearchPanel(v),
+        onOptionsChange: (options) => {
+          caseSensitive = options.caseSensitive;
+          wholeWord = options.wholeWord;
+          regexp = options.regexp;
+          replaceValue = options.replaceValue;
+          sync();
+        },
+        onSelectAll: () => selectMatches(v),
+        onReplace: () => replaceNext(v),
+        onReplaceAll: () => replaceAll(v),
+        onToggleReplace: (visible) => { replaceVisible = visible; },
+      },
     });
-    [btnCase, btnWord, btnRe].forEach(t => t.addEventListener("click", () => {
-      t.dataset.on = t.dataset.on === "1" ? "0" : "1";
-      t.classList.toggle("csb-on", t.dataset.on === "1");
-      sync();
-    }));
 
     return {
       dom,
       top: false,
-      mount() { findInput.focus(); findInput.select(); },
+      mount() { panel.focusSearch?.(); },
       update(update) {
         // sync match count from search state
         const q = getSearchQuery(update.state);
-        if (q.search !== findInput.value) findInput.value = q.search;
+        if (q.search !== searchValue) searchValue = q.search;
+      },
+      destroy() {
+        unmount(panel);
       },
     };
-  }
-
-  function mkToggle(label, title) {
-    const b = document.createElement("button");
-    b.textContent = label; b.title = title;
-    b.className = "csb-toggle"; b.dataset.on = "0";
-    return b;
-  }
-  function mkIconBtn(label, title, fn) {
-    const b = document.createElement("button");
-    b.textContent = label; b.title = title; b.className = "csb-btn";
-    b.addEventListener("click", fn); return b;
   }
 
   onMount(async () => {

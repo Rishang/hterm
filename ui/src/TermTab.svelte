@@ -5,6 +5,7 @@
   import { SearchAddon } from "@xterm/addon-search";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { WebglAddon } from "@xterm/addon-webgl";
+  import FindBar from "./FindBar.svelte";
   import "@xterm/xterm/css/xterm.css";
 
   /** @type {{ active: boolean, findTrigger?: number }} */
@@ -30,8 +31,7 @@
   /** @type {SearchAddon} */
   let searchAddon;
   let webglAddon = null;
-  /** @type {HTMLInputElement | null} */
-  let findInput = $state(null);
+  let findBar = $state(null);
   /** @type {WebSocket | null} */
   let ws = null;
   let reconnectDelay = RECONNECT_DELAY_MS;
@@ -76,8 +76,7 @@
   function openFind() {
     findOpen = true;
     setTimeout(() => {
-      findInput?.focus();
-      findInput?.select();
+      findBar?.focusSearch();
     }, 0);
   }
 
@@ -88,6 +87,10 @@
     searchAddon?.clearDecorations();
     term?.clearSelection();
     term?.focus();
+  }
+
+  function onFindOptionsChange() {
+    runFind(true, true);
   }
 
   function runFind(next = true, incremental = false) {
@@ -390,29 +393,20 @@
 <div class="term-host">
   <div class="term-tab-wrap" bind:this={container}></div>
   {#if findOpen}
-    <div class="term-find csb" role="search">
-      <div class="csb-row">
-        <input
-          bind:this={findInput}
-          bind:value={findQuery}
-          class="csb-input"
-          placeholder="Find"
-          aria-label="Find"
-          oninput={() => runFind(true, true)}
-          onkeydown={onFindKeydown}
-        />
-        <span class="csb-count">{findResultCount ? `${Math.max(findResultIndex + 1, 1)}/${findResultCount}` : ""}</span>
-        <button
-          class:csb-on={findCaseSensitive}
-          class="csb-toggle"
-          title="Match Case"
-          onclick={() => { findCaseSensitive = !findCaseSensitive; runFind(true, true); }}
-        >Aa</button>
-        <button class="csb-btn" title="Previous Match" onclick={() => runFind(false)}>↑</button>
-        <button class="csb-btn" title="Next Match" onclick={() => runFind(true)}>↓</button>
-        <button class="csb-close" title="Close" onclick={closeFind}>×</button>
-      </div>
-    </div>
+    <FindBar
+      bind:this={findBar}
+      bind:value={findQuery}
+      bind:caseSensitive={findCaseSensitive}
+      readonly={true}
+      className="term-find"
+      countText={findResultCount ? `${Math.max(findResultIndex + 1, 1)}/${findResultCount}` : ""}
+      onSearchInput={() => runFind(true, true)}
+      onKeydown={onFindKeydown}
+      onOptionsChange={onFindOptionsChange}
+      onPrevious={() => runFind(false)}
+      onNext={() => runFind(true)}
+      onClose={closeFind}
+    />
   {/if}
 </div>
 
@@ -434,7 +428,7 @@
     overflow: hidden;
     padding: 1px 2px;
   }
-  .term-find {
+  :global(.term-find) {
     position: absolute;
     top: 0;
     right: 0;
