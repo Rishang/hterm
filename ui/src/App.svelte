@@ -69,8 +69,11 @@
   let showSidebar = $state(false);
   let sidebarWidth = $state(220);
   let searchTrigger = $state(0);
+  let lastActiveTerminalTab = $state("t1");
+  let lastActiveFileTab = $state(null);
 
   function isTermTab(id) { return termTabs.includes(id); }
+  function isFileTab(id) { return !!fileTabById(id); }
   function openActiveSearch() { searchTrigger++; }
   function switchTab(delta) {
     if (tabOrder.length <= 1) return;
@@ -80,7 +83,18 @@
       : (idx + delta + tabOrder.length) % tabOrder.length;
     activeTab = tabOrder[nextIdx];
   }
+  function tabTypeSwitchTarget() {
+    if (isTermTab(activeTab)) {
+      return isFileTab(lastActiveFileTab) ? lastActiveFileTab : null;
+    }
+    return isTermTab(lastActiveTerminalTab) ? lastActiveTerminalTab : termTabs[0];
+  }
+  function switchTabType() {
+    const target = tabTypeSwitchTarget();
+    if (target && target !== activeTab) activeTab = target;
+  }
   function onGlobalKeydown(e) {
+    const switchType = e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === "`" || e.code === "Backquote");
     const nextByPage = e.ctrlKey && !e.metaKey && !e.altKey && e.key === "PageDown";
     const prevByPage = e.ctrlKey && !e.metaKey && !e.altKey && e.key === "PageUp";
     const nextByAltPage = e.altKey && !e.ctrlKey && !e.metaKey && e.key === "PageDown";
@@ -88,7 +102,11 @@
     const nextByBracket = e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "]";
     const prevByBracket = e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "[";
 
-    if (nextByPage || nextByAltPage || nextByBracket) {
+    if (switchType) {
+      e.preventDefault();
+      e.stopPropagation();
+      switchTabType();
+    } else if (nextByPage || nextByAltPage || nextByBracket) {
       e.preventDefault();
       e.stopPropagation();
       switchTab(1);
@@ -170,6 +188,11 @@
   $effect(() => {
     const tab = activeTab;
     if (tab === prevActiveTab) return;
+    if (termTabs.includes(prevActiveTab)) {
+      lastActiveTerminalTab = prevActiveTab;
+    } else if (fileTabById(prevActiveTab)) {
+      lastActiveFileTab = prevActiveTab;
+    }
     prevActiveTab = tab;
     if (termTabs.includes(tab)) return;
     const ft = fileTabs.find(t => t.id === tab);
