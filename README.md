@@ -474,9 +474,6 @@ Create `config.json` for persistent settings:
   "maxClients": 10,
   "credential": "user:password",
   "theme": {
-    "background": "#1e1e1e",
-    "foreground": "#d4d4d4",
-    "cursor": "#528bff",
     "fontFamily": "'JetBrains Mono', monospace",
     "fontSize": 14
   }

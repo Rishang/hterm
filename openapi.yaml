@@ -62,7 +62,7 @@ paths:
   /api/config:
     get:
       summary: Get terminal configuration
-      description: Returns client-side configuration (theme, permissions, features)
+      description: Returns client-side configuration (font, permissions, features)
       tags:
         - terminal
       responses:
@@ -74,9 +74,6 @@ paths:
                 $ref: '#/components/schemas/ConfigResponse'
               example:
                 theme:
-                  background: "#1c1d1f"
-                  foreground: "#abb2bf"
-                  cursor: "#528bff"
                   fontFamily: "'JetBrains Mono', monospace"
                   fontSize: 14
                 writable: true

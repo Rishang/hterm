@@ -52,18 +52,24 @@
   let seenFindTrigger = $state(0);
   let findTriggerReady = $state(false);
 
-  const searchDecorations = {
-    matchBackground: "#3a3f4b",
-    matchOverviewRuler: "#5c6370",
-    activeMatchBackground: "#e5c07b",
-    activeMatchColorOverviewRuler: "#e5c07b",
-  };
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function searchDecorations() {
+    return {
+      matchBackground: cssVar("--search-match"),
+      matchOverviewRuler: cssVar("--text-subtle"),
+      activeMatchBackground: cssVar("--accent-yellow"),
+      activeMatchColorOverviewRuler: cssVar("--accent-yellow"),
+    };
+  }
 
   function searchOptions(incremental = false) {
     return {
       caseSensitive: findCaseSensitive,
       incremental,
-      decorations: searchDecorations,
+      decorations: searchDecorations(),
     };
   }
 
@@ -264,17 +270,17 @@
       scrollback: 3000, tabStopWidth: 4, allowProposedApi: true,
       reflowCursorLine: true,
       theme: {
-        background:  "#282c34",
-        foreground:  "#abb2bf",
-        cursor:      "#528bff",
-        black:       "#3f4451", red:         "#e06c75",
-        green:       "#98c379", yellow:      "#e5c07b",
-        blue:        "#61afef", magenta:     "#c678dd",
-        cyan:        "#56b6c2", white:       "#abb2bf",
-        brightBlack: "#4f5666", brightRed:   "#e06c75",
-        brightGreen: "#98c379", brightYellow:"#e5c07b",
-        brightBlue:  "#61afef", brightMagenta:"#c678dd",
-        brightCyan:  "#56b6c2", brightWhite: "#ffffff",
+        background:  cssVar("--bg-primary"),
+        foreground:  cssVar("--text-primary"),
+        cursor:      cssVar("--accent-cursor"),
+        black:       cssVar("--terminal-black"), red:         cssVar("--status-disconnected"),
+        green:       cssVar("--accent-green"), yellow:      cssVar("--accent-yellow"),
+        blue:        cssVar("--accent-blue"), magenta:     cssVar("--accent-purple"),
+        cyan:        cssVar("--accent-cyan"), white:       cssVar("--text-primary"),
+        brightBlack: cssVar("--terminal-bright-black"), brightRed:   cssVar("--status-disconnected"),
+        brightGreen: cssVar("--accent-green"), brightYellow:cssVar("--accent-yellow"),
+        brightBlue:  cssVar("--accent-blue"), brightMagenta:cssVar("--accent-purple"),
+        brightCyan:  cssVar("--accent-cyan"), brightWhite: cssVar("--terminal-bright-white"),
       },
     });
     fitAddon = new FitAddon();
@@ -344,16 +350,12 @@
       }
     } catch {}
 
-    // Load config for theme/font
+    // Load config for terminal font settings.
     try {
       const res = await fetch(`${basePath}/api/config`);
       if (res.ok) {
         const cfg = await res.json();
         const tc = cfg.theme || {};
-        const themeKeys = ["background","foreground","cursor","cursorAccent","selectionBackground","selectionForeground","black","red","green","yellow","blue","magenta","cyan","white","brightBlack","brightRed","brightGreen","brightYellow","brightBlue","brightMagenta","brightCyan","brightWhite"];
-        const theme = {};
-        for (const k of themeKeys) if (typeof tc[k] === "string") theme[k] = tc[k];
-        if (Object.keys(theme).length) term.options.theme = theme;
         if (tc.fontFamily) term.options.fontFamily = tc.fontFamily;
         if (tc.fontSize) term.options.fontSize = tc.fontSize;
       }
@@ -422,6 +424,8 @@
     min-height: 0;
     display: flex;
     overflow: hidden;
+    margin-left: 2px;
+    margin-bottom: 2px;
   }
   .term-tab-wrap {
     flex: 1;

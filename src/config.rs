@@ -2,57 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-/// xterm.js theme — maps directly to `ITheme`.
-///
-/// Every field is optional; missing keys are omitted from JSON so xterm.js
-/// falls back to its own defaults rather than receiving `null`.
+/// Terminal font settings exposed to the browser.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThemeConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub background: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub foreground: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor_accent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection_background: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection_foreground: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub black: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub red: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub green: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub yellow: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blue: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub magenta: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cyan: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub white: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bright_black: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bright_red: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bright_green: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bright_yellow: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bright_blue: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bright_magenta: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bright_cyan: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bright_white: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,28 +15,6 @@ pub struct ThemeConfig {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
-            background:          Some("#1c1d1f".into()),
-            foreground:          Some("#abb2bf".into()),
-            cursor:              Some("#528bff".into()),
-            cursor_accent:       None,
-            selection_background:None,
-            selection_foreground:None,
-            black:               Some("#282c34".into()),
-            red:                 Some("#e06c75".into()),
-            green:               Some("#98c379".into()),
-            yellow:              Some("#e5c07b".into()),
-            blue:                Some("#61afef".into()),
-            magenta:             Some("#c678dd".into()),
-            cyan:                Some("#56b6c2".into()),
-            white:               Some("#abb2bf".into()),
-            bright_black:        Some("#5c6370".into()),
-            bright_red:          Some("#e06c75".into()),
-            bright_green:        Some("#98c379".into()),
-            bright_yellow:       Some("#e5c07b".into()),
-            bright_blue:         Some("#61afef".into()),
-            bright_magenta:      Some("#c678dd".into()),
-            bright_cyan:         Some("#56b6c2".into()),
-            bright_white:        Some("#ffffff".into()),
             font_family:         Some("'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace".into()),
             font_size:           Some(14),
         }

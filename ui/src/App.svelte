@@ -282,9 +282,9 @@
           {#if tab.saveStatus === "saving"}
             <span style="font-size:10px;opacity:0.5">↑</span>
           {:else if tab.saveStatus === "saved"}
-            <span style="font-size:10px;color:#98c379">✓</span>
+            <span style="font-size:10px;color:var(--status-connected)">✓</span>
           {:else if tab.saveStatus === "error"}
-            <span style="font-size:10px;color:#e06c75">!</span>
+            <span style="font-size:10px;color:var(--status-disconnected)">!</span>
           {/if}
           <span class="tab-close" role="button" tabindex="-1"
             onclick={(e) => { e.stopPropagation(); closeFileTab(tab.id); }}

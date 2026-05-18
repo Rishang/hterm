@@ -308,14 +308,14 @@
         ".cm-scroller": {
           fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
           overflow: "auto",
-          scrollbarColor: "var(--scrollbar-thumb) transparent",
+          scrollbarColor: "var(--scrollbar-thumb) var(--transparent)",
           scrollbarWidth: "thin",
         },
         ".cm-scroller::-webkit-scrollbar": { width: "var(--scrollbar-size)", height: "var(--scrollbar-size)" },
-        ".cm-scroller::-webkit-scrollbar-track": { background: "transparent" },
+        ".cm-scroller::-webkit-scrollbar-track": { background: "var(--transparent)" },
         ".cm-scroller::-webkit-scrollbar-thumb": {
           background: "var(--scrollbar-thumb)",
-          border: "3px solid transparent",
+          border: "3px solid var(--transparent)",
           backgroundClip: "padding-box",
           borderRadius: "999px",
         },

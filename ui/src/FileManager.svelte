@@ -596,12 +596,12 @@
       <span class="fm-folder-icon">
         {#if node.open}
           <svg width="15" height="13" viewBox="0 0 16 14" fill="none">
-            <path d="M1 3.5C1 2.67 1.67 2 2.5 2H6l1.5 1.5H13.5C14.33 3.5 15 4.17 15 5v6.5C15 12.33 14.33 13 13.5 13h-11C1.67 13 1 12.33 1 11.5V3.5z" fill="#e5c07b"/>
-            <path d="M1 6.5h14" stroke="#c9a84c" stroke-width="0.7" opacity="0.6"/>
+            <path d="M1 3.5C1 2.67 1.67 2 2.5 2H6l1.5 1.5H13.5C14.33 3.5 15 4.17 15 5v6.5C15 12.33 14.33 13 13.5 13h-11C1.67 13 1 12.33 1 11.5V3.5z" fill="var(--accent-yellow)"/>
+            <path d="M1 6.5h14" stroke="var(--accent-yellow-strong)" stroke-width="0.7" opacity="0.6"/>
           </svg>
         {:else}
           <svg width="15" height="13" viewBox="0 0 16 14" fill="none">
-            <path d="M1 3.5C1 2.67 1.67 2 2.5 2H6l1.5 1.5H13.5C14.33 3.5 15 4.17 15 5v6.5C15 12.33 14.33 13 13.5 13h-11C1.67 13 1 12.33 1 11.5V3.5z" fill="#61afef" opacity="0.85"/>
+            <path d="M1 3.5C1 2.67 1.67 2 2.5 2H6l1.5 1.5H13.5C14.33 3.5 15 4.17 15 5v6.5C15 12.33 14.33 13 13.5 13h-11C1.67 13 1 12.33 1 11.5V3.5z" fill="var(--accent)" opacity="0.85"/>
           </svg>
         {/if}
       </span>
@@ -611,8 +611,8 @@
         <span class="fm-ext-badge" style:background={icon.bg} style:color={icon.color}>{icon.label}</span>
       {:else}
         <svg class="fm-file-icon-svg" width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <path d="M4 2h5.5L12 4.5V14H4V2z" stroke="#5c6370" stroke-width="1.3" stroke-linejoin="round"/>
-          <polyline points="9,2 9,5 12,5" stroke="#5c6370" stroke-width="1.3" stroke-linejoin="round" fill="none"/>
+          <path d="M4 2h5.5L12 4.5V14H4V2z" stroke="var(--text-subtle)" stroke-width="1.3" stroke-linejoin="round"/>
+          <polyline points="9,2 9,5 12,5" stroke="var(--text-subtle)" stroke-width="1.3" stroke-linejoin="round" fill="none"/>
         </svg>
       {/if}
     {/if}
