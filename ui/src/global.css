@@ -212,7 +212,7 @@ html, body {
 .fm-path-input {
   flex: 1; min-width: 0;
   background: var(--bg-surface-hover); color: var(--text-primary);
-  font-size: 11px; padding: 2px 6px;
+  font-size: 13px; padding: 2px 6px;
   border: 1px solid var(--accent) !important; border-radius: 3px; outline: none;
 }
 .fm-icon-btn {
