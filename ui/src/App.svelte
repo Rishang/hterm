@@ -362,7 +362,11 @@
             </div>
           {:else}
             {#if tab.preview}
-              <div class="fm-md-preview">{@html marked(tab.editContent)}</div>
+              {#if tab.path.endsWith(".html") || tab.path.endsWith(".htm")}
+                <iframe class="fm-html-preview" title="HTML Preview" sandbox="" srcdoc={tab.editContent}></iframe>
+              {:else}
+                <div class="fm-md-preview">{@html marked(tab.editContent)}</div>
+              {/if}
             {:else}
               {#key tab.id + tab.langOverride}
               <CodeEditor
@@ -390,7 +394,7 @@
           <div class="fm-breadcrumb">
             <span class="fm-bc-part">{tab.path}</span>
             <div class="fm-bc-tools">
-              {#if tab.path.endsWith(".md")}
+              {#if tab.path.endsWith(".md") || tab.path.endsWith(".html") || tab.path.endsWith(".htm")}
                 <button class="fm-preview-btn" class:active={tab.preview} onclick={() => { tab.preview = !tab.preview; }}>
                   {tab.preview ? "✎ Edit" : "👁 Preview"}
                 </button>

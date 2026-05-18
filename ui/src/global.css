@@ -443,6 +443,7 @@ html, body {
 .fm-md-preview::-webkit-scrollbar { width: 3px; }
 .fm-md-preview::-webkit-scrollbar-track { background: var(--transparent); }
 .fm-md-preview::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.fm-html-preview { flex: 1; width: 100%; border: none; background: #fff; }
 .fm-md-preview h1, .fm-md-preview h2, .fm-md-preview h3 { margin: 1em 0 0.5em; color: var(--text-primary); }
 .fm-md-preview h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
 .fm-md-preview h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
