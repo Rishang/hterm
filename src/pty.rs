@@ -23,9 +23,7 @@ use tokio::io::Interest;
 /// The master fd is held as a non-blocking [`AsyncFd`] so Tokio can drive
 /// reads and writes without blocking the executor thread.
 ///
-/// On [`Drop`] the child receives `SIGHUP`.  Because `SIGCHLD` is set to
-/// `SIG_IGN` at startup, the kernel reaps the zombie immediately with no
-/// `waitpid` required.
+/// On [`Drop`] the child receives `SIGHUP` and is reaped via `waitpid`.
 pub struct PtySession {
     master:    AsyncFd<OwnedFd>,
     child_pid: Pid,

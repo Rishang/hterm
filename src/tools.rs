@@ -466,12 +466,10 @@ async fn run_simple_command_with_timeout(
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return Ok(tool_error(format!("Failed to spawn {}: {}", cmd_name, e))),
     };
-
-    let mut child = child;
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
@@ -929,6 +927,12 @@ async fn detect_file_type(path: &str) -> String {
     details.join(", ")
 }
 
+fn elf_u16(bytes: &[u8], offset: usize, little_endian: bool) -> Option<u16> {
+    let hi = *bytes.get(offset)?;
+    let lo = *bytes.get(offset + 1)?;
+    Some(if little_endian { u16::from_le_bytes([hi, lo]) } else { u16::from_be_bytes([hi, lo]) })
+}
+
 /// Parse ELF file details (architecture, endianness, type)
 fn parse_elf_details(bytes: &[u8]) -> Option<String> {
     if bytes.len() < 18 || !bytes.starts_with(&[0x7F, b'E', b'L', b'F']) {
@@ -941,11 +945,8 @@ fn parse_elf_details(bytes: &[u8]) -> Option<String> {
         _ => "unknown-bit",
     };
 
-    let endian = match bytes.get(5) {
-        Some(1) => "LSB",
-        Some(2) => "MSB",
-        _ => "unknown-endian",
-    };
+    let little_endian = bytes.get(5).copied() == Some(1);
+    let endian = if little_endian { "LSB" } else { "MSB" };
 
     let os_abi = match bytes.get(7) {
         Some(0) => "SYSV",
@@ -955,48 +956,21 @@ fn parse_elf_details(bytes: &[u8]) -> Option<String> {
         _ => "Unix",
     };
 
-    // e_type is at offset 16 (little-endian u16)
-    let exec_type = if endian == "LSB" && bytes.len() >= 18 {
-        match u16::from_le_bytes([bytes[16], bytes[17]]) {
-            1 => "relocatable",
-            2 => "executable",
-            3 => "shared object",
-            4 => "core dump",
-            _ => "unknown",
-        }
-    } else if endian == "MSB" && bytes.len() >= 18 {
-        match u16::from_be_bytes([bytes[16], bytes[17]]) {
-            1 => "relocatable",
-            2 => "executable",
-            3 => "shared object",
-            4 => "core dump",
-            _ => "unknown",
-        }
-    } else {
-        "unknown"
+    let exec_type = match elf_u16(bytes, 16, little_endian) {
+        Some(1) => "relocatable",
+        Some(2) => "executable",
+        Some(3) => "shared object",
+        Some(4) => "core dump",
+        _ => "unknown",
     };
 
-    // e_machine is at offset 18 (little-endian u16)
-    let machine = if endian == "LSB" && bytes.len() >= 20 {
-        match u16::from_le_bytes([bytes[18], bytes[19]]) {
-            0x03 => "x86",
-            0x3E => "x86-64",
-            0x28 => "ARM",
-            0xB7 => "AArch64",
-            0xF3 => "RISC-V",
-            _ => "",
-        }
-    } else if endian == "MSB" && bytes.len() >= 20 {
-        match u16::from_be_bytes([bytes[18], bytes[19]]) {
-            0x03 => "x86",
-            0x3E => "x86-64",
-            0x28 => "ARM",
-            0xB7 => "AArch64",
-            0xF3 => "RISC-V",
-            _ => "",
-        }
-    } else {
-        ""
+    let machine = match elf_u16(bytes, 18, little_endian) {
+        Some(0x03) => "x86",
+        Some(0x3E) => "x86-64",
+        Some(0x28) => "ARM",
+        Some(0xB7) => "AArch64",
+        Some(0xF3) => "RISC-V",
+        _ => "",
     };
 
     let mut parts = vec![class, endian];

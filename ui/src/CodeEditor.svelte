@@ -296,6 +296,8 @@
           borderRadius: "999px",
         },
         ".cm-content": { padding: "8px 0" },
+        ".cm-gutters": { color: "#5a6173", fontSize: "12px" },
+        ".cm-activeLineGutter": { color: "#c0cad8" },
       }),
       langExt,
     ].flat();

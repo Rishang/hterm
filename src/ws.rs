@@ -136,7 +136,10 @@ pub async fn ws_handler(
         let origin = headers.get("origin").and_then(|v| v.to_str().ok());
         let host   = headers.get("host").and_then(|v| v.to_str().ok());
         if let (Some(o), Some(h)) = (origin, host) {
-            if !o.contains(h) {
+            // Strip scheme from Origin ("https://host:port" → "host:port") before
+            // comparing so that substrings like "evil-app.com" can't spoof "app".
+            let origin_authority = o.find("://").map(|i| &o[i + 3..]).unwrap_or(o);
+            if origin_authority != h {
                 tracing::warn!(origin = o, host = h, "WebSocket upgrade rejected: origin mismatch");
                 return StatusCode::FORBIDDEN.into_response();
             }
@@ -285,7 +288,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
 
 // ── PTY main loop ─────────────────────────────────────────────────────────────
 
-/// Owns `PtySession`. Reads PTY output with a 4 ms coalesce window (up to
+/// Owns `PtySession`. Reads PTY output with a 1 ms coalesce window (up to
 /// 16 KiB per frame), handles incoming keystrokes/resize commands, and sends
 /// WebSocket keepalive pings — all in a single task.
 async fn pty_main_loop(
@@ -371,7 +374,7 @@ async fn pty_main_loop(
 /// Returns `true` if the outbound channel is closed (caller should stop).
 async fn flush_coalesce(coalesce: &mut BytesMut, tx: &mpsc::Sender<Message>) -> bool {
     if coalesce.len() > 1 {
-        let payload = coalesce.split_to(coalesce.len()).freeze();
+        let payload = coalesce.split().freeze();
         coalesce.reserve(MAX_COALESCE_SIZE + 1);
         coalesce.extend_from_slice(&[MSG_OUTPUT]);
         return tx.send(Message::Binary(payload)).await.is_err();

@@ -42,8 +42,13 @@ pub struct ReadFileResponse {
 }
 
 pub async fn list_files_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(q): Query<FilesQuery>,
 ) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     let dir = q.path.unwrap_or_else(|| "/".to_string());
     let path = Path::new(&dir);
 
