@@ -126,6 +126,9 @@
     ls:     () => Promise.all([import("@codemirror/legacy-modes/mode/livescript"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.liveScript)),
     mathematica: () => Promise.all([import("@codemirror/legacy-modes/mode/mathematica"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.mathematica)),
     wl:     () => Promise.all([import("@codemirror/legacy-modes/mode/mathematica"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.mathematica)),
+    tf:     () => import("codemirror-lang-terraform").then(m => m.terraform()),
+    tfvars: () => import("codemirror-lang-terraform").then(m => m.terraform()),
+    hcl:    () => import("codemirror-lang-terraform").then(m => m.terraform()),
   };
 
   export const supportedLangs = Object.keys(langMap).sort();

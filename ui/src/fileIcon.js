@@ -29,6 +29,9 @@ export const EXT_ICONS = {
   sql:   { label: 'DB',  bg: 'var(--file-cyan-bg)', color: 'var(--accent-cyan)' },
   xml:   { label: '<>',  bg: 'var(--file-orange-bg)', color: 'var(--accent-orange)' },
   txt:   { label: 'TXT', bg: 'var(--file-gray-bg)', color: 'var(--text-primary)' },
+  tf:    { label: 'TF',  bg: 'var(--file-purple-bg)', color: 'var(--accent-purple)' },
+  tfvars:{ label: 'TF',  bg: 'var(--file-purple-bg)', color: 'var(--accent-purple)' },
+  hcl:   { label: 'HCL', bg: 'var(--file-purple-bg)', color: 'var(--accent-purple)' },
 };
 
 /** @param {string} name @returns {{label:string,bg:string,color:string}|null} */
