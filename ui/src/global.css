@@ -80,10 +80,17 @@ html, body {
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-strong);
   height: 32px; flex-shrink: 0;
+  overflow: visible;
+  z-index: 20;
+}
+
+.tab-strip {
+  display: flex; align-items: stretch;
+  flex: 1; min-width: 0;
   overflow-x: auto; overflow-y: hidden;
   scrollbar-width: none;
 }
-#tab-bar::-webkit-scrollbar { display: none; }
+.tab-strip::-webkit-scrollbar { display: none; }
 
 .tab {
   display: flex; align-items: center; gap: 5px;
@@ -300,7 +307,8 @@ html, body {
 
 /* File content area */
 .tab-sidebar-btn,
-.tab-search-btn {
+.tab-search-btn,
+.tab-info-btn {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 100%; flex-shrink: 0;
   background: none; color: var(--text-subtle);
@@ -309,7 +317,71 @@ html, body {
   transition: color 0.12s;
 }
 .tab-search-btn { width: 30px; }
-.tab-sidebar-btn:hover, .tab-sidebar-btn.active, .tab-search-btn:hover { color: var(--accent); }
+.tab-sidebar-btn:hover,
+.tab-sidebar-btn.active,
+.tab-search-btn:hover,
+.tab-info-btn:hover,
+.tab-info-btn.active {
+  color: var(--accent);
+}
+
+.tab-bar-actions {
+  position: relative;
+  display: flex; align-items: stretch;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-strong);
+}
+
+.tab-info-btn {
+  width: 34px;
+  border-right: none !important;
+}
+
+.shortcut-popover {
+  position: absolute;
+  top: calc(100% + 6px); right: 6px;
+  width: min(360px, calc(100vw - 18px));
+  padding: 10px;
+  z-index: 40;
+  background: var(--bg-surface-stronger);
+  border: 1px solid var(--border-muted) !important;
+  border-radius: 6px;
+  box-shadow: 0 14px 30px var(--shadow-strong);
+  color: var(--text-primary);
+}
+
+.shortcut-title {
+  margin-bottom: 8px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.shortcut-grid kbd {
+  padding: 2px 5px;
+  border: 1px solid var(--border-muted);
+  border-bottom-color: var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-surface-active);
+  color: var(--text-strong);
+  font: 10px 'SF Mono', 'Fira Code', monospace;
+  white-space: nowrap;
+}
+
+.shortcut-grid span {
+  min-width: 0;
+  color: var(--text-primary);
+}
 
 .tab-new-btn {
   display: flex; align-items: center; justify-content: center;

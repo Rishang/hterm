@@ -3,6 +3,7 @@
   import FileManager from "./FileManager.svelte";
   import CodeEditor, { supportedLangs } from "./CodeEditor.svelte";
   import TermTab from "./TermTab.svelte";
+  import ShortcutInfo from "./ShortcutInfo.svelte";
   import { fileIcon } from "./fileIcon.js";
   import { marked } from "marked";
 
@@ -71,6 +72,7 @@
   let searchTrigger = $state(0);
   let lastActiveTerminalTab = $state("t1");
   let lastActiveFileTab = $state(null);
+  let showShortcutHints = $state(false);
 
   function isTermTab(id) { return termTabs.includes(id); }
   function isFileTab(id) { return !!fileTabById(id); }
@@ -106,6 +108,10 @@
       e.preventDefault();
       e.stopPropagation();
       switchTabType();
+    } else if (showShortcutHints && e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      showShortcutHints = false;
     } else if (nextByPage || nextByAltPage || nextByBracket) {
       e.preventDefault();
       e.stopPropagation();
@@ -226,97 +232,101 @@
 
 <div id="app-root">
   <div id="tab-bar" role="toolbar" tabindex="-1" onmousedown={onTabBarMouseDown}>
-    <!-- Sidebar toggle -->
-    <div class="tab-sidebar-btn" class:active={showSidebar}
-      role="button" tabindex="-1"
-      onclick={() => { showSidebar = !showSidebar; }}
-      onkeydown={(e) => e.key === "Enter" && (showSidebar = !showSidebar)}
-      title="Toggle file explorer">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3.5 7.5V6a2 2 0 0 1 2-2h4.2l2 2H18a2 2 0 0 1 2 2v1.5"/>
-        <path d="M3 9.5h18l-1.2 8.2a2 2 0 0 1-2 1.8H6.2a2 2 0 0 1-2-1.8L3 9.5z"/>
-        <path d="M7.5 13h5"/>
-        <path d="M7.5 16h8"/>
-      </svg>
-    </div>
+    <div class="tab-strip">
+      <!-- Sidebar toggle -->
+      <div class="tab-sidebar-btn" class:active={showSidebar}
+        role="button" tabindex="-1"
+        onclick={() => { showSidebar = !showSidebar; }}
+        onkeydown={(e) => e.key === "Enter" && (showSidebar = !showSidebar)}
+        title="Toggle file explorer">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 7.5V6a2 2 0 0 1 2-2h4.2l2 2H18a2 2 0 0 1 2 2v1.5"/>
+          <path d="M3 9.5h18l-1.2 8.2a2 2 0 0 1-2 1.8H6.2a2 2 0 0 1-2-1.8L3 9.5z"/>
+          <path d="M7.5 13h5"/>
+          <path d="M7.5 16h8"/>
+        </svg>
+      </div>
 
-    <!-- Search active tab -->
-    <button class="tab-search-btn" type="button" onclick={openActiveSearch} title="Find in active tab" aria-label="Find in active tab">
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-        <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/>
-        <line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-    </button>
+      <!-- Search active tab -->
+      <button class="tab-search-btn" type="button" onclick={openActiveSearch} title="Find in active tab" aria-label="Find in active tab">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+          <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/>
+          <line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
 
-    <!-- New terminal tab -->
-    <div class="tab-new-btn" role="button" tabindex="-1" onclick={newTermTab} onkeydown={(e) => e.key === "Enter" && newTermTab()} title="New terminal">
-      <svg width="14" height="14" viewBox="0 0 14 14"><line x1="7" y1="1.5" x2="7" y2="12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="1.5" y1="7" x2="12.5" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-    </div>
+      <!-- New terminal tab -->
+      <div class="tab-new-btn" role="button" tabindex="-1" onclick={newTermTab} onkeydown={(e) => e.key === "Enter" && newTermTab()} title="New terminal">
+        <svg width="14" height="14" viewBox="0 0 14 14"><line x1="7" y1="1.5" x2="7" y2="12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="1.5" y1="7" x2="12.5" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </div>
 
-    <!-- Ordered tabs -->
-    {#each tabOrder as tabId (tabId)}
-      {#if isTermTab(tabId)}
-        <div class="tab" class:active={activeTab === tabId} class:tab-drag-over={dragOverId === tabId}
-          role="button" tabindex="-1"
-          draggable="true"
-          ondragstart={(e) => onDragStart(e, tabId)}
-          ondragover={(e) => onDragOver(e, tabId)}
-          ondragleave={() => { if (dragOverId === tabId) dragOverId = null; }}
-          ondrop={(e) => onDrop(e, tabId)}
-          ondragend={onDragEnd}
-          onclick={() => { activeTab = tabId; }}
-          onkeydown={(e) => e.key === "Enter" && (activeTab = tabId)}>
-          <svg class="tab-icon-svg" width="13" height="13" viewBox="0 0 16 16" fill="none">
-            <polyline points="2,5 7,8 2,11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-            <line x1="8.5" y1="11" x2="14" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-          </svg>
-          <span class="tab-name">Terminal {termTabs.length > 1 ? termTabs.indexOf(tabId) + 1 : ""}</span>
-          {#if termTabs.length > 1}
+      <!-- Ordered tabs -->
+      {#each tabOrder as tabId (tabId)}
+        {#if isTermTab(tabId)}
+          <div class="tab" class:active={activeTab === tabId} class:tab-drag-over={dragOverId === tabId}
+            role="button" tabindex="-1"
+            draggable="true"
+            ondragstart={(e) => onDragStart(e, tabId)}
+            ondragover={(e) => onDragOver(e, tabId)}
+            ondragleave={() => { if (dragOverId === tabId) dragOverId = null; }}
+            ondrop={(e) => onDrop(e, tabId)}
+            ondragend={onDragEnd}
+            onclick={() => { activeTab = tabId; }}
+            onkeydown={(e) => e.key === "Enter" && (activeTab = tabId)}>
+            <svg class="tab-icon-svg" width="13" height="13" viewBox="0 0 16 16" fill="none">
+              <polyline points="2,5 7,8 2,11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              <line x1="8.5" y1="11" x2="14" y2="11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+            <span class="tab-name">Terminal {termTabs.length > 1 ? termTabs.indexOf(tabId) + 1 : ""}</span>
+            {#if termTabs.length > 1}
+              <span class="tab-close" role="button" tabindex="-1"
+                onclick={(e) => { e.stopPropagation(); closeTermTab(tabId); }}
+                onkeydown={(e) => e.key === "Enter" && (e.stopPropagation(), closeTermTab(tabId))}>
+                <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </span>
+            {/if}
+          </div>
+        {:else if fileTabById(tabId)}
+          {@const tab = fileTabById(tabId)}
+          {@const icon = fileIcon(tab.name)}
+          <div class="tab" class:active={activeTab === tab.id} class:tab-drag-over={dragOverId === tab.id}
+            role="button" tabindex="-1"
+            draggable="true"
+            ondragstart={(e) => onDragStart(e, tab.id)}
+            ondragover={(e) => onDragOver(e, tab.id)}
+            ondragleave={() => { if (dragOverId === tab.id) dragOverId = null; }}
+            ondrop={(e) => onDrop(e, tab.id)}
+            ondragend={onDragEnd}
+            class:tab-modified={tab.mode === "edit" && tab.editContent !== tab.content}
+            onclick={() => { activeTab = tab.id; }}
+            onkeydown={(e) => e.key === "Enter" && (activeTab = tab.id)}>
+            {#if icon}
+              <span class="tab-file-badge" style:background={icon.bg} style:color={icon.color}>{icon.label}</span>
+            {:else}
+              <svg class="tab-icon-svg" width="12" height="12" viewBox="0 0 16 16" fill="none">
+                <path d="M4 2h5.5L12 4.5V14H4V2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                <polyline points="9,2 9,5 12,5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/>
+              </svg>
+            {/if}
+            <span class="tab-name">{tab.name}</span>
+            {#if tab.saveStatus === "saving"}
+              <span style="font-size:10px;opacity:0.5">↑</span>
+            {:else if tab.saveStatus === "saved"}
+              <span style="font-size:10px;color:var(--status-connected)">✓</span>
+            {:else if tab.saveStatus === "error"}
+              <span style="font-size:10px;color:var(--status-disconnected)">!</span>
+            {/if}
             <span class="tab-close" role="button" tabindex="-1"
-              onclick={(e) => { e.stopPropagation(); closeTermTab(tabId); }}
-              onkeydown={(e) => e.key === "Enter" && (e.stopPropagation(), closeTermTab(tabId))}>
+              onclick={(e) => { e.stopPropagation(); closeFileTab(tab.id); }}
+              onkeydown={(e) => e.key === "Enter" && (e.stopPropagation(), closeFileTab(tab.id))}>
               <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </span>
-          {/if}
-        </div>
-      {:else if fileTabById(tabId)}
-        {@const tab = fileTabById(tabId)}
-        {@const icon = fileIcon(tab.name)}
-        <div class="tab" class:active={activeTab === tab.id} class:tab-drag-over={dragOverId === tab.id}
-          role="button" tabindex="-1"
-          draggable="true"
-          ondragstart={(e) => onDragStart(e, tab.id)}
-          ondragover={(e) => onDragOver(e, tab.id)}
-          ondragleave={() => { if (dragOverId === tab.id) dragOverId = null; }}
-          ondrop={(e) => onDrop(e, tab.id)}
-          ondragend={onDragEnd}
-          class:tab-modified={tab.mode === "edit" && tab.editContent !== tab.content}
-          onclick={() => { activeTab = tab.id; }}
-          onkeydown={(e) => e.key === "Enter" && (activeTab = tab.id)}>
-          {#if icon}
-            <span class="tab-file-badge" style:background={icon.bg} style:color={icon.color}>{icon.label}</span>
-          {:else}
-            <svg class="tab-icon-svg" width="12" height="12" viewBox="0 0 16 16" fill="none">
-              <path d="M4 2h5.5L12 4.5V14H4V2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-              <polyline points="9,2 9,5 12,5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/>
-            </svg>
-          {/if}
-          <span class="tab-name">{tab.name}</span>
-          {#if tab.saveStatus === "saving"}
-            <span style="font-size:10px;opacity:0.5">↑</span>
-          {:else if tab.saveStatus === "saved"}
-            <span style="font-size:10px;color:var(--status-connected)">✓</span>
-          {:else if tab.saveStatus === "error"}
-            <span style="font-size:10px;color:var(--status-disconnected)">!</span>
-          {/if}
-          <span class="tab-close" role="button" tabindex="-1"
-            onclick={(e) => { e.stopPropagation(); closeFileTab(tab.id); }}
-            onkeydown={(e) => e.key === "Enter" && (e.stopPropagation(), closeFileTab(tab.id))}>
-            <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </span>
-        </div>
-      {/if}
-    {/each}
+          </div>
+        {/if}
+      {/each}
+    </div>
+
+    <ShortcutInfo bind:open={showShortcutHints} />
 
   </div>
 
