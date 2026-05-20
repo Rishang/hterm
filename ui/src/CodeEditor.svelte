@@ -148,8 +148,8 @@
   import { dockerCompletionSource, isDockerAutocompleteFile } from "./autocomplete/docker.js";
   import { goTemplateCompletionSource, isGoTemplateFile } from "./autocomplete/gotemplate.js";
 
-  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, searchTrigger?: number, onchange?: (v: string) => void, onsave?: () => void }} */
-  let { path, value, readonly = false, lang = "", searchTrigger = 0, onchange, onsave } = $props();
+  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, searchTrigger?: number, savedState?: import("@codemirror/state").EditorState | null, onchange?: (v: string) => void, onsave?: () => void, onsavedstate?: (s: import("@codemirror/state").EditorState) => void }} */
+  let { path, value, readonly = false, lang = "", searchTrigger = 0, savedState = null, onchange, onsave, onsavedstate } = $props();
 
   /** @type {HTMLElement} */
   let container;
@@ -306,7 +306,7 @@
     ].flat();
 
     view = new EditorView({
-      state: EditorState.create({ doc: value, extensions }),
+      state: savedState ?? EditorState.create({ doc: value, extensions }),
       parent: container,
     });
   });
@@ -323,7 +323,7 @@
     if (view) openSearchPanel(view);
   });
 
-  onDestroy(() => { view?.destroy(); });
+  onDestroy(() => { onsavedstate?.(view?.state); view?.destroy(); });
 </script>
 
 <div class="cm-wrap" bind:this={container}></div>
