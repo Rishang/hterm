@@ -268,13 +268,25 @@
   });
 
   onMount(async () => {
+    let cfgFontFamily = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace";
+    let cfgFontSize = 16;
+    try {
+      const res = await fetch(`${basePath}/api/config`);
+      if (res.ok) {
+        const cfg = await res.json();
+        const tc = cfg.theme || {};
+        if (tc.fontFamily) cfgFontFamily = tc.fontFamily;
+        if (tc.fontSize) cfgFontSize = tc.fontSize;
+      }
+    } catch {}
     try {
       if (document.fonts?.load) {
+        const px = `${cfgFontSize}px`;
         await Promise.all([
-          document.fonts.load("16px 'JetBrains Mono'"),
-          document.fonts.load("bold 16px 'JetBrains Mono'"),
-          document.fonts.load("italic 16px 'JetBrains Mono'"),
-          document.fonts.load("bold italic 16px 'JetBrains Mono'"),
+          document.fonts.load(`${px} ${cfgFontFamily}`),
+          document.fonts.load(`bold ${px} ${cfgFontFamily}`),
+          document.fonts.load(`italic ${px} ${cfgFontFamily}`),
+          document.fonts.load(`bold italic ${px} ${cfgFontFamily}`),
         ]);
       }
     } catch {}
@@ -282,12 +294,13 @@
       cursorBlink: true, cursorInactiveStyle: "outline", cursorStyle: "block",
       scrollback: 3000, tabStopWidth: 4, allowProposedApi: true,
       reflowCursorLine: true,
+      fontFamily: cfgFontFamily,
+      fontSize: cfgFontSize,
       theme: {
         background:  cssVar("--bg-primary"),
         foreground:  cssVar("--text-primary"),
         cursor:      cssVar("--accent-cursor"),
         selectionBackground: cssVar("--accent-blue") + "66",
-        selectionForeground: cssVar("--text-primary"),
         selectionInactiveBackground: cssVar("--accent-blue") + "33",
         black:       cssVar("--terminal-black"), red:         cssVar("--status-disconnected"),
         green:       cssVar("--accent-green"), yellow:      cssVar("--accent-yellow"),
@@ -363,17 +376,6 @@
           clipboardWriteGranted = s.state === "granted";
           s.onchange = () => { clipboardWriteGranted = s.state === "granted"; };
         }).catch(() => {});
-      }
-    } catch {}
-
-    // Load config for terminal font settings.
-    try {
-      const res = await fetch(`${basePath}/api/config`);
-      if (res.ok) {
-        const cfg = await res.json();
-        const tc = cfg.theme || {};
-        if (tc.fontFamily) term.options.fontFamily = tc.fontFamily;
-        if (tc.fontSize) term.options.fontSize = tc.fontSize;
       }
     } catch {}
 
