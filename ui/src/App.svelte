@@ -36,7 +36,7 @@
 
   // ── File tabs ─────────────────────────────────────────────────────────────
   /**
-   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string, loading?: boolean, skipRefreshOnActivate?: boolean }} FileTab
+   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string, loading?: boolean, skipRefreshOnActivate?: boolean, editorState?: import("@codemirror/state").EditorState | null }} FileTab
    */
   /** @type {FileTab[]} */
   let fileTabs = $state([]);
@@ -44,7 +44,7 @@
   /** @param {string} path @param {string} content @param {boolean} isBinary @param {string} error @param {boolean} loading */
   function openFileTab(path, content, isBinary, error, loading = false) {
     if (fileTabs.find(t => t.id === path)) { activeTab = path; return; }
-    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, loading, skipRefreshOnActivate: true });
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, loading, skipRefreshOnActivate: true, editorState: null });
     tabOrder.push(path);
     activeTab = path;
   }
@@ -373,8 +373,10 @@
                 path={tab.path}
                 value={tab.editContent}
                 lang={tab.langOverride}
+                savedState={tab.editorState}
                 searchTrigger={searchTrigger}
                 onchange={(v) => { tab.editContent = v; }}
+                onsavedstate={(s) => { tab.editorState = s; }}
                 onsave={async () => {
                   tab.saveStatus = "saving";
                   try {
@@ -399,7 +401,7 @@
                   {tab.preview ? "✎ Edit" : "👁 Preview"}
                 </button>
               {/if}
-              <select id="lang-select" class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.langOverride = e.target.value; }}>
+              <select id="lang-select" class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.editorState = null; tab.langOverride = e.target.value; }}>
                 <option value="">Auto</option>
                 {#each supportedLangs as l}
                   <option value={l}>{l}</option>
