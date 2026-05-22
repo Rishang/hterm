@@ -83,9 +83,6 @@ importers:
       '@codemirror/view':
         specifier: ^6.43.0
         version: 6.43.0
-      '@fontsource/jetbrains-mono':
-        specifier: ^5.2.8
-        version: 5.2.8
       '@replit/codemirror-minimap':
         specifier: ^0.5.2
         version: 0.5.2(@codemirror/language@6.12.3)(@codemirror/lint@6.9.6)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)(@lezer/common@1.5.2)(@lezer/highlight@1.2.3)
@@ -407,9 +404,6 @@ packages:
   '@eslint/plugin-kit@0.6.1':
     resolution: {integrity: sha512-iH1B076HoAshH1mLpHMgwdGeTs0CYwL0SPMkGuSebZrwBp16v415e9NZXg2jtrqPVQjf6IANe2Vtlr5KswtcZQ==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
-
-  '@fontsource/jetbrains-mono@5.2.8':
-    resolution: {integrity: sha512-6w8/SG4kqvIMu7xd7wt6x3idn1Qux3p9N62s6G3rfldOUYHpWcc2FKrqf+Vo44jRvqWj2oAtTHrZXEP23oSKwQ==}
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -1462,8 +1456,6 @@ snapshots:
     dependencies:
       '@eslint/core': 1.1.1
       levn: 0.4.1
-
-  '@fontsource/jetbrains-mono@5.2.8': {}
 
   '@humanfs/core@0.19.1': {}
 

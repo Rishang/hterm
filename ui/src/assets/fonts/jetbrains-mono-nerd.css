@@ -1,0 +1,95 @@
+/*
+ * JetBrainsMono Nerd Font — split into two unicode-range subsets per weight:
+ *   *-latin.woff2  (~50 KB)  Latin, Greek, Cyrillic, box-drawing, math, arrows…
+ *   *-icons.woff2  (~840 KB) Private-Use Area (Nerd Font icons: Powerline,
+ *                            Font Awesome, Devicons, Material, Codicons, …)
+ *
+ * The browser downloads each subset on demand: a session that never renders
+ * an icon glyph never fetches the 840 KB icons file.
+ *
+ * Italic-icons and BoldItalic-icons are intentionally not declared — italic
+ * styling of icon glyphs is essentially never meaningful, and the browser
+ * will substitute the upright icon glyph (visually identical for icons).
+ */
+
+/* ── Latin / box-drawing / math / arrows ───────────────────────────────── */
+
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./JetBrainsMonoNerdFont-Regular-latin.woff2') format('woff2');
+  unicode-range:
+    U+0000-024F, U+0259, U+02B0-02FF, U+0300-036F, U+0370-03FF, U+0400-04FF,
+    U+0500-052F, U+1E00-1EFF, U+2000-206F, U+2070-209F, U+20A0-20CF,
+    U+2100-214F, U+2150-218F, U+2190-21FF, U+2200-22FF, U+2300-23FF,
+    U+2400-243F, U+2440-245F, U+2460-24FF, U+2500-257F, U+2580-259F,
+    U+25A0-25FF, U+2600-26FF, U+2700-27BF, U+2900-297F, U+2B00-2BFF,
+    U+FB00-FB4F, U+FE70-FEFE, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./JetBrainsMonoNerdFont-Bold-latin.woff2') format('woff2');
+  unicode-range:
+    U+0000-024F, U+0259, U+02B0-02FF, U+0300-036F, U+0370-03FF, U+0400-04FF,
+    U+0500-052F, U+1E00-1EFF, U+2000-206F, U+2070-209F, U+20A0-20CF,
+    U+2100-214F, U+2150-218F, U+2190-21FF, U+2200-22FF, U+2300-23FF,
+    U+2400-243F, U+2440-245F, U+2460-24FF, U+2500-257F, U+2580-259F,
+    U+25A0-25FF, U+2600-26FF, U+2700-27BF, U+2900-297F, U+2B00-2BFF,
+    U+FB00-FB4F, U+FE70-FEFE, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./JetBrainsMonoNerdFont-Italic-latin.woff2') format('woff2');
+  unicode-range:
+    U+0000-024F, U+0259, U+02B0-02FF, U+0300-036F, U+0370-03FF, U+0400-04FF,
+    U+0500-052F, U+1E00-1EFF, U+2000-206F, U+2070-209F, U+20A0-20CF,
+    U+2100-214F, U+2150-218F, U+2190-21FF, U+2200-22FF, U+2300-23FF,
+    U+2400-243F, U+2440-245F, U+2460-24FF, U+2500-257F, U+2580-259F,
+    U+25A0-25FF, U+2600-26FF, U+2700-27BF, U+2900-297F, U+2B00-2BFF,
+    U+FB00-FB4F, U+FE70-FEFE, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./JetBrainsMonoNerdFont-BoldItalic-latin.woff2') format('woff2');
+  unicode-range:
+    U+0000-024F, U+0259, U+02B0-02FF, U+0300-036F, U+0370-03FF, U+0400-04FF,
+    U+0500-052F, U+1E00-1EFF, U+2000-206F, U+2070-209F, U+20A0-20CF,
+    U+2100-214F, U+2150-218F, U+2190-21FF, U+2200-22FF, U+2300-23FF,
+    U+2400-243F, U+2440-245F, U+2460-24FF, U+2500-257F, U+2580-259F,
+    U+25A0-25FF, U+2600-26FF, U+2700-27BF, U+2900-297F, U+2B00-2BFF,
+    U+FB00-FB4F, U+FE70-FEFE, U+FFFD;
+}
+
+/* ── Nerd Font icons (Private-Use Area) ────────────────────────────────── */
+
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./JetBrainsMonoNerdFont-Regular-icons.woff2') format('woff2');
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./JetBrainsMonoNerdFont-Bold-icons.woff2') format('woff2');
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}

@@ -285,7 +285,7 @@
       EditorView.theme({
         "&": { height: "100%", fontSize: "14px" },
         ".cm-scroller": {
-          fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace",
+          fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
           overflow: "auto",
           scrollbarColor: "var(--scrollbar-thumb) var(--transparent)",
           scrollbarWidth: "thin",

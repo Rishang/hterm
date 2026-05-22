@@ -15,7 +15,7 @@ pub struct ThemeConfig {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
-            font_family:         Some("'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace".into()),
+            font_family:         Some("'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace".into()),
             font_size:           Some(14),
         }
     }

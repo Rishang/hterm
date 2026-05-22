@@ -268,7 +268,7 @@
   });
 
   onMount(async () => {
-    let cfgFontFamily = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace";
+    let cfgFontFamily = "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace";
     let cfgFontSize = 16;
     try {
       const res = await fetch(`${basePath}/api/config`);
