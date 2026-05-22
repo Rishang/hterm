@@ -4,7 +4,8 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { SearchAddon } from "@xterm/addon-search";
   import { WebLinksAddon } from "@xterm/addon-web-links";
-  import { WebglAddon } from "@xterm/addon-webgl";
+  import { CanvasAddon } from "@xterm/addon-canvas";
+  import { Unicode11Addon } from "@xterm/addon-unicode11";
   import FindBar from "./FindBar.svelte";
   import "@xterm/xterm/css/xterm.css";
 
@@ -30,7 +31,7 @@
   let fitAddon;
   /** @type {SearchAddon} */
   let searchAddon;
-  let webglAddon = null;
+  let canvasAddon = null;
   let findBar = $state(null);
   /** @type {WebSocket | null} */
   let ws = null;
@@ -268,8 +269,11 @@
   });
 
   onMount(async () => {
-    let cfgFontFamily = "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace";
-    let cfgFontSize = 16;
+    // No default fontFamily — let xterm.js use its built-in default and the
+    // browser pick the system monospace font. Only override if the server
+    // config explicitly sets one.
+    let cfgFontFamily = null;
+    let cfgFontSize = null;
     try {
       const res = await fetch(`${basePath}/api/config`);
       if (res.ok) {
@@ -279,23 +283,12 @@
         if (tc.fontSize) cfgFontSize = tc.fontSize;
       }
     } catch {}
-    try {
-      if (document.fonts?.load) {
-        const px = `${cfgFontSize}px`;
-        await Promise.all([
-          document.fonts.load(`${px} ${cfgFontFamily}`),
-          document.fonts.load(`bold ${px} ${cfgFontFamily}`),
-          document.fonts.load(`italic ${px} ${cfgFontFamily}`),
-          document.fonts.load(`bold italic ${px} ${cfgFontFamily}`),
-        ]);
-      }
-    } catch {}
     term = new Terminal({
       cursorBlink: true, cursorInactiveStyle: "outline", cursorStyle: "block",
       scrollback: 3000, tabStopWidth: 4, allowProposedApi: true,
       reflowCursorLine: true,
-      fontFamily: cfgFontFamily,
-      fontSize: cfgFontSize,
+      ...(cfgFontFamily ? { fontFamily: cfgFontFamily } : {}),
+      ...(cfgFontSize ? { fontSize: cfgFontSize } : {}),
       theme: {
         background:  cssVar("--bg-primary"),
         foreground:  cssVar("--text-primary"),
@@ -317,20 +310,23 @@
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
     term.loadAddon(new WebLinksAddon());
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
     searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => {
       findResultIndex = resultIndex;
       findResultCount = resultCount;
     });
     term.open(container);
+
+    // Canvas renderer — no GPU texture-atlas race conditions like WebGL,
+    // and uses the browser's native font pipeline for rasterization.
+    // If it fails to load (very rare), xterm falls back to its built-in DOM
+    // renderer automatically.
     try {
-      webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => {
-        webglAddon?.dispose();
-        webglAddon = null;
-      });
-      term.loadAddon(webglAddon);
+      canvasAddon = new CanvasAddon();
+      term.loadAddon(canvasAddon);
     } catch {
-      webglAddon = null;
+      canvasAddon = null;
     }
 
     window.addEventListener("resize", scheduleFit);
@@ -398,7 +394,7 @@
     if (rafId !== null) cancelAnimationFrame(rafId);
     if (fitRafId !== null) cancelAnimationFrame(fitRafId);
     resizeObserver?.disconnect();
-    webglAddon?.dispose();
+    canvasAddon?.dispose();
     window.removeEventListener("resize", scheduleFit);
     if (window.visualViewport) window.visualViewport.removeEventListener("resize", scheduleFit);
     term?.dispose();

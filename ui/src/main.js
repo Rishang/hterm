@@ -1,5 +1,4 @@
 import { mount } from 'svelte'
-import './assets/fonts/jetbrains-mono-nerd.css'
 import './global.css'
 import App from './App.svelte'
 

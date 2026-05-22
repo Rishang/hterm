@@ -1,8 +1,5 @@
 {
   "port": 7681,
   "shell": "/bin/bash",
-  "theme": {
-    "fontFamily": "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-    "fontSize": 16
-  }
+  "theme": {}
 }

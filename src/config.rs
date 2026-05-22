@@ -15,8 +15,10 @@ pub struct ThemeConfig {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
-            font_family:         Some("'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace".into()),
-            font_size:           Some(14),
+            // No defaults — let xterm.js / the browser pick the system monospace
+            // font and size. Users can still override via config.json.
+            font_family: None,
+            font_size:   None,
         }
     }
 }
