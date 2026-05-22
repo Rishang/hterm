@@ -268,6 +268,16 @@
   });
 
   onMount(async () => {
+    try {
+      if (document.fonts?.load) {
+        await Promise.all([
+          document.fonts.load("16px 'JetBrains Mono'"),
+          document.fonts.load("bold 16px 'JetBrains Mono'"),
+          document.fonts.load("italic 16px 'JetBrains Mono'"),
+          document.fonts.load("bold italic 16px 'JetBrains Mono'"),
+        ]);
+      }
+    } catch {}
     term = new Terminal({
       cursorBlink: true, cursorInactiveStyle: "outline", cursorStyle: "block",
       scrollback: 3000, tabStopWidth: 4, allowProposedApi: true,
@@ -276,6 +286,9 @@
         background:  cssVar("--bg-primary"),
         foreground:  cssVar("--text-primary"),
         cursor:      cssVar("--accent-cursor"),
+        selectionBackground: cssVar("--accent-blue") + "66",
+        selectionForeground: cssVar("--text-primary"),
+        selectionInactiveBackground: cssVar("--accent-blue") + "33",
         black:       cssVar("--terminal-black"), red:         cssVar("--status-disconnected"),
         green:       cssVar("--accent-green"), yellow:      cssVar("--accent-yellow"),
         blue:        cssVar("--accent-blue"), magenta:     cssVar("--accent-purple"),
