@@ -148,8 +148,8 @@
   import { dockerCompletionSource, isDockerAutocompleteFile } from "./autocomplete/docker.js";
   import { goTemplateCompletionSource, isGoTemplateFile } from "./autocomplete/gotemplate.js";
 
-  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, searchTrigger?: number, savedState?: import("@codemirror/state").EditorState | null, onchange?: (v: string) => void, onsave?: () => void, onsavedstate?: (s: import("@codemirror/state").EditorState) => void }} */
-  let { path, value, readonly = false, lang = "", searchTrigger = 0, savedState = null, onchange, onsave, onsavedstate } = $props();
+  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, active?: boolean, searchTrigger?: number, savedState?: import("@codemirror/state").EditorState | null, onchange?: (v: string) => void, onsave?: () => void, onsavedstate?: (s: import("@codemirror/state").EditorState) => void }} */
+  let { path, value, readonly = false, lang = "", active = true, searchTrigger = 0, savedState = null, onchange, onsave, onsavedstate } = $props();
 
   /** @type {HTMLElement} */
   let container;
@@ -320,7 +320,7 @@
     }
     if (trigger === seenSearchTrigger) return;
     seenSearchTrigger = trigger;
-    if (view) openSearchPanel(view);
+    if (active && view) openSearchPanel(view);
   });
 
   onDestroy(() => { onsavedstate?.(view?.state); view?.destroy(); });

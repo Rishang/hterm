@@ -9,8 +9,8 @@
   import FindBar from "./FindBar.svelte";
   import "@xterm/xterm/css/xterm.css";
 
-  /** @type {{ active: boolean, findTrigger?: number }} */
-  let { active, findTrigger = 0 } = $props();
+  /** @type {{ active: boolean, searchActive?: boolean, findTrigger?: number }} */
+  let { active, searchActive = active, findTrigger = 0 } = $props();
 
   const MSG_INPUT = 0, MSG_OUTPUT = 1, MSG_RESIZE = 2, MSG_ERROR = 3;
   const RECONNECT_DELAY_MS = 1000;
@@ -265,7 +265,7 @@
     }
     if (trigger === seenFindTrigger) return;
     seenFindTrigger = trigger;
-    if (active && term) openFind();
+    if (searchActive && term) openFind();
   });
 
   onMount(async () => {

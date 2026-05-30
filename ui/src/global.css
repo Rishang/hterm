@@ -338,6 +338,79 @@ html, body {
   border-right: none !important;
 }
 
+.split-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin: 5px 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 4px;
+  overflow: visible;
+}
+.split-control.active {
+  border-color: var(--accent-dim-border) !important;
+  background: var(--accent-dim);
+}
+.split-control > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  background: var(--transparent);
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.split-action-btn {
+  width: 24px;
+  border-radius: 3px 0 0 3px;
+}
+.split-menu-btn {
+  width: 16px;
+  border-left: 1px solid var(--border-strong) !important;
+  border-radius: 0 3px 3px 0;
+}
+.split-control > button:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+.split-control.active > button {
+  color: var(--accent);
+}
+.split-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 150px;
+  padding: 5px;
+  z-index: 45;
+  background: var(--bg-surface-stronger);
+  border: 1px solid var(--border-muted) !important;
+  border-radius: 6px;
+  box-shadow: 0 14px 30px var(--shadow-strong);
+}
+.split-menu button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 9px;
+  background: var(--transparent);
+  color: var(--text-primary);
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  font-family: inherit;
+}
+.split-menu button:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-strong);
+}
+
 .shortcut-popover {
   position: absolute;
   top: calc(100% + 6px); right: 6px;
@@ -396,6 +469,78 @@ html, body {
   flex: 1; min-width: 0;
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--bg-primary);
+}
+
+.workspace-layout {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+.workspace-layout.is-split {
+  background: var(--border-strong);
+}
+.workspace-layout.is-split-down {
+  flex-direction: column;
+}
+.workspace-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg-primary);
+  position: relative;
+}
+.workspace-pane-terminal {
+  flex: 0 1 50%;
+}
+.workspace-pane-file {
+  flex: 1 1 0;
+}
+.workspace-pane.focused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--accent-dim-border);
+}
+.split-resize-handle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border-strong);
+  position: relative;
+}
+.split-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background: var(--border-muted);
+}
+.split-resize-handle:hover::after {
+  background: var(--accent);
+}
+.workspace-layout.is-split-down .workspace-pane-terminal,
+.workspace-layout.is-split-down .workspace-pane-file {
+  min-height: 96px;
+}
+.workspace-layout.is-split-down .split-resize-handle {
+  width: 100%;
+  height: 5px;
+  cursor: row-resize;
+}
+.workspace-layout.is-split-down .split-resize-handle::after {
+  top: 2px;
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 1px;
 }
 
 .fm-save-btn {
@@ -468,6 +613,23 @@ html, body {
 .fm-empty {
   flex: 1; display: flex; align-items: center; justify-content: center;
   color: var(--text-subtle); font-size: 13px;
+}
+.fm-empty-pane {
+  flex-direction: column;
+  gap: 8px;
+}
+.fm-empty-action {
+  padding: 4px 10px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-muted) !important;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.fm-empty-action:hover {
+  border-color: var(--accent-dim-border) !important;
+  color: var(--accent);
 }
 .fm-loading {
   padding: 12px; color: var(--text-subtle); font-size: 12px; text-align: center;
@@ -582,3 +744,29 @@ html, body {
 }
 .fm-ctx-disabled { color: var(--text-subtle) !important; cursor: default; }
 .fm-ctx-disabled:hover { background: var(--transparent) !important; color: var(--text-subtle) !important; }
+
+@media (max-width: 760px) {
+  .split-control {
+    margin-inline: 4px;
+  }
+  .workspace-layout.is-split {
+    flex-direction: column;
+  }
+  .workspace-layout.is-split .workspace-pane-terminal,
+  .workspace-layout.is-split .workspace-pane-file {
+    min-height: 96px;
+  }
+  .split-resize-handle {
+    width: 100%;
+    height: 5px;
+    cursor: row-resize;
+  }
+  .split-resize-handle::after {
+    top: 2px;
+    bottom: auto;
+    left: 0;
+    right: 0;
+    width: auto;
+    height: 1px;
+  }
+}

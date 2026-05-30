@@ -1,11 +1,10 @@
 <script>
   import { onMount } from "svelte";
   import FileManager from "./FileManager.svelte";
-  import CodeEditor, { supportedLangs } from "./CodeEditor.svelte";
+  import FilePane from "./FilePane.svelte";
   import TermTab from "./TermTab.svelte";
   import ShortcutInfo from "./ShortcutInfo.svelte";
   import { fileIcon } from "./fileIcon.js";
-  import { marked } from "marked";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
@@ -29,6 +28,9 @@
     const next = tabAfterClose(id);
     termTabs = termTabs.filter(t => t !== id);
     tabOrder = tabOrder.filter(t => t !== id);
+    if (lastActiveTerminalTab === id) {
+      lastActiveTerminalTab = termTabs[0];
+    }
     if (activeTab === id) {
       activeTab = next ?? termTabs[0];
     }
@@ -43,9 +45,14 @@
 
   /** @param {string} path @param {string} content @param {boolean} isBinary @param {string} error @param {boolean} loading */
   function openFileTab(path, content, isBinary, error, loading = false) {
-    if (fileTabs.find(t => t.id === path)) { activeTab = path; return; }
+    if (fileTabs.find(t => t.id === path)) {
+      lastActiveFileTab = path;
+      activeTab = path;
+      return;
+    }
     fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, loading, skipRefreshOnActivate: true, editorState: null });
     tabOrder.push(path);
+    lastActiveFileTab = path;
     activeTab = path;
   }
 
@@ -55,13 +62,14 @@
     const next = tabAfterClose(id);
     fileTabs.splice(idx, 1);
     tabOrder = tabOrder.filter(t => t !== id);
+    if (lastActiveFileTab === id) {
+      lastActiveFileTab = fileTabs[idx]?.id ?? fileTabs[idx - 1]?.id ?? fileTabs[0]?.id ?? null;
+    }
     if (activeTab === id) {
       activeTab = next ?? termTabs[0];
     }
   }
 
-  /** @returns {FileTab|undefined} */
-  function activeFileTab() { return fileTabs.find(t => t.id === activeTab); }
   /** @param {string} id @returns {FileTab|undefined} */
   function fileTabById(id) { return fileTabs.find(t => t.id === id); }
 
@@ -73,10 +81,43 @@
   let lastActiveTerminalTab = $state("t1");
   let lastActiveFileTab = $state(null);
   let showShortcutHints = $state(false);
+  let layoutMode = $state("single");
+  let splitOrientation = $state("right");
+  let splitMenuOpen = $state(false);
+  let splitRatio = $state(0.5);
 
   function isTermTab(id) { return termTabs.includes(id); }
   function isFileTab(id) { return !!fileTabById(id); }
   function openActiveSearch() { searchTrigger++; }
+  function visibleTerminalTab() {
+    return isTermTab(activeTab) ? activeTab : (isTermTab(lastActiveTerminalTab) ? lastActiveTerminalTab : termTabs[0]);
+  }
+  function visibleFileTab() {
+    const id = isFileTab(activeTab) ? activeTab : (isFileTab(lastActiveFileTab) ? lastActiveFileTab : fileTabs[0]?.id);
+    return id ? fileTabById(id) : null;
+  }
+  function splitWorkspace(orientation = "down") {
+    layoutMode = "split";
+    splitOrientation = orientation;
+    splitMenuOpen = false;
+    if (!visibleFileTab()) showSidebar = true;
+  }
+  function closeSplit() {
+    layoutMode = "single";
+    splitMenuOpen = false;
+  }
+  function toggleSplitWorkspace() {
+    if (layoutMode === "split") closeSplit();
+    else splitWorkspace("down");
+  }
+  function focusTerminalPane() {
+    const tid = visibleTerminalTab();
+    if (tid) activeTab = tid;
+  }
+  function focusFilePane() {
+    const file = visibleFileTab();
+    if (file) activeTab = file.id;
+  }
   function switchTab(delta) {
     if (tabOrder.length <= 1) return;
     const idx = tabOrder.indexOf(activeTab);
@@ -112,6 +153,10 @@
       e.preventDefault();
       e.stopPropagation();
       showShortcutHints = false;
+    } else if (splitMenuOpen && e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      splitMenuOpen = false;
     } else if (nextByPage || nextByAltPage || nextByBracket) {
       e.preventDefault();
       e.stopPropagation();
@@ -144,6 +189,30 @@
       document.body.style.userSelect = "";
     }
     document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  function onSplitResizeStart(e) {
+    e.preventDefault();
+    const container = e.currentTarget.parentElement;
+    const rect = container?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return;
+    const stacked = splitOrientation === "down" || window.matchMedia("(max-width: 760px)").matches;
+    function onMove(e) {
+      const rawRatio = stacked
+        ? (e.clientY - rect.top) / rect.height
+        : (e.clientX - rect.left) / rect.width;
+      splitRatio = Math.min(0.8, Math.max(0.2, rawRatio));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    document.body.style.cursor = stacked ? "row-resize" : "col-resize";
     document.body.style.userSelect = "none";
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -326,6 +395,46 @@
       {/each}
     </div>
 
+    <div class="split-control" class:active={layoutMode === "split"} role="group" aria-label="Split editor">
+      <button class="split-action-btn" type="button" title={layoutMode === "split" ? "Single view" : "Split down"} aria-label={layoutMode === "split" ? "Single view" : "Split down"} onclick={toggleSplitWorkspace}>
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+          <rect x="2.5" y="3" width="11" height="10" rx="1.4" stroke="currentColor" stroke-width="1.35"/>
+          <line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1.35"/>
+        </svg>
+      </button>
+      <button class="split-menu-btn" type="button" title="Split options" aria-label="Split options" aria-expanded={splitMenuOpen} onclick={(e) => { e.stopPropagation(); splitMenuOpen = !splitMenuOpen; }}>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+          <path d="M2.2 3.8 5 6.2l2.8-2.4" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      {#if splitMenuOpen}
+        <div class="split-menu" role="menu">
+          <button type="button" role="menuitem" onclick={() => splitWorkspace("right")}>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <rect x="2.5" y="3" width="11" height="10" rx="1.4" stroke="currentColor" stroke-width="1.35"/>
+              <line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1.35"/>
+            </svg>
+            <span>Split right</span>
+          </button>
+          <button type="button" role="menuitem" onclick={() => splitWorkspace("down")}>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <rect x="2.5" y="3" width="11" height="10" rx="1.4" stroke="currentColor" stroke-width="1.35"/>
+              <line x1="2.5" y1="8" x2="13.5" y2="8" stroke="currentColor" stroke-width="1.35"/>
+            </svg>
+            <span>Split down</span>
+          </button>
+          {#if layoutMode === "split"}
+            <button type="button" role="menuitem" onclick={closeSplit}>
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                <rect x="2.5" y="3" width="11" height="10" rx="1.4" stroke="currentColor" stroke-width="1.35"/>
+              </svg>
+              <span>Single view</span>
+            </button>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
     <ShortcutInfo bind:open={showShortcutHints} />
 
   </div>
@@ -338,79 +447,44 @@
     <button class="fm-resize-handle" class:hidden={!showSidebar} type="button" aria-label="Resize file explorer"
       onmousedown={onResizeStart}></button>
 
-    <!-- Terminal tabs (all mounted, hidden when inactive so state is preserved) -->
-    {#each termTabs as tid (tid)}
-      <div class="term-wrap" class:hidden={activeTab !== tid}>
-        <TermTab active={activeTab === tid} findTrigger={searchTrigger} />
-      </div>
-    {/each}
-
-    <!-- File content -->
-    {#if !isTermTab(activeTab)}
-      {@const tab = activeFileTab()}
-      {#if tab}
-        <div id="file-content">
-          {#if tab.loading}
-            <div class="fm-loading">Loading...</div>
-          {:else if tab.error}
-            <div class="fm-error fm-error-main">{tab.error}</div>
-          {:else if tab.isBinary}
-            <div class="fm-binary">
-              <span class="fm-binary-icon">⬡</span>
-              <span>Binary file — cannot display as text</span>
-              <code class="fm-binary-path">{tab.path}</code>
-            </div>
-          {:else}
-            {#if tab.preview}
-              {#if tab.path.endsWith(".html") || tab.path.endsWith(".htm")}
-                <iframe class="fm-html-preview" title="HTML Preview" sandbox="" srcdoc={tab.editContent}></iframe>
-              {:else}
-                <div class="fm-md-preview">{@html marked(tab.editContent)}</div>
-              {/if}
-            {:else}
-              {#key tab.id + tab.langOverride}
-              <CodeEditor
-                path={tab.path}
-                value={tab.editContent}
-                lang={tab.langOverride}
-                savedState={tab.editorState}
-                searchTrigger={searchTrigger}
-                onchange={(v) => { tab.editContent = v; }}
-                onsavedstate={(s) => { tab.editorState = s; }}
-                onsave={async () => {
-                  tab.saveStatus = "saving";
-                  try {
-                    await fetch(`${basePath}/api/tools/call`, {
-                      method: "POST", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ name: "write_file", arguments: { path: tab.path, content: tab.editContent } }),
-                    });
-                    tab.content = tab.editContent; tab.saveStatus = "saved";
-                    setTimeout(() => { tab.saveStatus = ""; }, 2000);
-                  } catch { tab.saveStatus = "error"; }
-                }}
-              />
-              {/key}
-            {/if}
-          {/if}
-
-          <div class="fm-breadcrumb">
-            <span class="fm-bc-part">{tab.path}</span>
-            <div class="fm-bc-tools">
-              {#if tab.path.endsWith(".md") || tab.path.endsWith(".html") || tab.path.endsWith(".htm")}
-                <button class="fm-preview-btn" class:active={tab.preview} onclick={() => { tab.preview = !tab.preview; }}>
-                  {tab.preview ? "✎ Edit" : "👁 Preview"}
-                </button>
-              {/if}
-              <select id="lang-select" class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.editorState = null; tab.langOverride = e.target.value; }}>
-                <option value="">Auto</option>
-                {#each supportedLangs as l}
-                  <option value={l}>{l}</option>
-                {/each}
-              </select>
-            </div>
+    <div class="workspace-layout" class:is-split={layoutMode === "split"} class:is-split-down={layoutMode === "split" && splitOrientation === "down"}>
+      {#if layoutMode === "split"}
+        {@const terminalId = visibleTerminalTab()}
+        {@const fileTab = visibleFileTab()}
+        {#if splitOrientation === "down"}
+          <section class="workspace-pane workspace-pane-file" class:focused={fileTab && activeTab === fileTab.id} style:flex-basis={`${splitRatio * 100}%`} aria-label="File pane" onpointerdown={focusFilePane}>
+            <FilePane tab={fileTab} active={fileTab && activeTab === fileTab.id} searchTrigger={searchTrigger} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+          </section>
+          <button class="split-resize-handle" type="button" aria-label="Resize file and terminal panes" onmousedown={onSplitResizeStart}></button>
+          <section class="workspace-pane workspace-pane-terminal" class:focused={activeTab === terminalId} aria-label="Terminal pane" onpointerdown={focusTerminalPane}>
+            {#each termTabs as tid (tid)}
+              <div class="term-wrap" class:hidden={tid !== terminalId}>
+                <TermTab active={tid === terminalId} searchActive={activeTab === tid} findTrigger={searchTrigger} />
+              </div>
+            {/each}
+          </section>
+        {:else}
+          <section class="workspace-pane workspace-pane-terminal" class:focused={activeTab === terminalId} style:flex-basis={`${splitRatio * 100}%`} aria-label="Terminal pane" onpointerdown={focusTerminalPane}>
+            {#each termTabs as tid (tid)}
+              <div class="term-wrap" class:hidden={tid !== terminalId}>
+                <TermTab active={tid === terminalId} searchActive={activeTab === tid} findTrigger={searchTrigger} />
+              </div>
+            {/each}
+          </section>
+          <button class="split-resize-handle" type="button" aria-label="Resize terminal and file panes" onmousedown={onSplitResizeStart}></button>
+          <section class="workspace-pane workspace-pane-file" class:focused={fileTab && activeTab === fileTab.id} aria-label="File pane" onpointerdown={focusFilePane}>
+            <FilePane tab={fileTab} active={fileTab && activeTab === fileTab.id} searchTrigger={searchTrigger} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+          </section>
+        {/if}
+      {:else if isFileTab(activeTab)}
+        <FilePane tab={visibleFileTab()} active={true} searchTrigger={searchTrigger} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+      {:else}
+        {#each termTabs as tid (tid)}
+          <div class="term-wrap" class:hidden={tid !== activeTab}>
+            <TermTab active={tid === activeTab} searchActive={activeTab === tid} findTrigger={searchTrigger} />
           </div>
-        </div>
+        {/each}
       {/if}
-    {/if}
+    </div>
   </div>
 </div>
