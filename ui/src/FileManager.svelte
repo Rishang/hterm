@@ -1,8 +1,8 @@
 <script>
   import { fileIcon } from './fileIcon.js';
 
-  /** @type {{ fileTabs: any[], activeTab: string, openFileTab: Function, visible?: boolean }} */
-  let { fileTabs, activeTab, openFileTab, visible = true } = $props();
+  /** @type {{ fileTabs: any[], activeTab: string, openFileTab: Function, openFileByPath: Function, visible?: boolean }} */
+  let { fileTabs, activeTab, openFileTab, openFileByPath, visible = true } = $props();
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
   const SIDEBAR_ROOT_STORAGE_KEY = "hterm:file-manager-root";
@@ -115,31 +115,7 @@
   /** @param {TreeNode} node */
   async function handleClick(node) {
     if (node.is_dir) { toggleDir(node); return; }
-    if (fileTabs.find(t => t.id === node.path)) { openFileTab(node.path, "", false, ""); return; }
-
-    openFileTab(node.path, "", false, "", true);
-    try {
-      const res = await fetch(`${basePath}/api/files/read?path=${encodeURIComponent(node.path)}`);
-      if (!res.ok) throw new Error(await res.text());
-      const result = await res.json();
-      const tab = fileTabs.find(t => t.id === node.path);
-      if (!tab) return;
-      tab.content = result.content ?? "";
-      tab.editContent = tab.content;
-      tab.isBinary = !!result.is_binary;
-      tab.error = "";
-      tab.loading = false;
-      fileTabs = fileTabs;
-    } catch (e) {
-      const tab = fileTabs.find(t => t.id === node.path);
-      if (!tab) return;
-      tab.content = "";
-      tab.editContent = "";
-      tab.isBinary = false;
-      tab.error = String(e);
-      tab.loading = false;
-      fileTabs = fileTabs;
-    }
+    openFileByPath(node.path);
   }
 
   // ── Path editing ──────────────────────────────────────────────────────────
