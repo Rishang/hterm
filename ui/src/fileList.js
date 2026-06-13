@@ -16,13 +16,17 @@ export function parseFileList(text) {
 
 /**
  * Fetch the project's file list via the bash tool.
- * rg/fd respect .gitignore (skipping node_modules/.git/target); find is the last resort.
+ * Searches under the bash tool's working directory ($(pwd)) and emits ABSOLUTE
+ * paths — the /api/files/read endpoint rejects non-absolute paths. rg/fd respect
+ * .gitignore (skipping node_modules/.git/target); find is the last resort and
+ * excludes the common heavy dirs explicitly since it ignores .gitignore.
  * @param {string} basePath
  * @returns {Promise<string[]>}
  */
 export async function fetchFileList(basePath) {
   const command =
-    "rg --files 2>/dev/null || fd -t f 2>/dev/null || find . -type f -not -path '*/.git/*'";
+    "root=\"$(pwd)\"; rg --files \"$root\" 2>/dev/null || fd -t f . \"$root\" 2>/dev/null || " +
+    "find \"$root\" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/target/*'";
   const res = await fetch(`${basePath}/api/tools/call`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

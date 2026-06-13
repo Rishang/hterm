@@ -33,9 +33,13 @@
     }
   }
 
-  // On open: reset query/selection, focus the input, show cache + background refresh.
+  /** Element focused before the palette opened, restored on dismiss. */
+  let prevFocused = null;
+
+  // On open: remember prior focus, reset query/selection, focus the input, show cache + background refresh.
   $effect(() => {
     if (open) {
+      prevFocused = document.activeElement;
       query = "";
       selected = 0;
       queueMicrotask(() => { inputEl?.focus(); inputEl?.select(); });
@@ -49,12 +53,19 @@
     if (selected > max) selected = max;
   });
 
-  function close() { open = false; }
+  // Dismiss without opening a file — restore focus to wherever it was (e.g. the terminal).
+  function close() {
+    open = false;
+    const el = prevFocused;
+    prevFocused = null;
+    queueMicrotask(() => { if (el instanceof HTMLElement) el.focus(); });
+  }
 
   function choose(path) {
     if (!path) return;
+    prevFocused = null; // opening a file: let the new tab take focus, don't restore.
+    open = false;
     openFileByPath(path);
-    close();
   }
 
   function scrollSelectedIntoView() {
