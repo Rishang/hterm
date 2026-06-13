@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from "svelte";
   import { fuzzyFilter } from "./fuzzy.js";
   import { fetchFileList } from "./fileList.js";
 
@@ -37,14 +38,17 @@
   let prevFocused = null;
 
   // On open: remember prior focus, reset query/selection, focus the input, show cache + background refresh.
+  // `open` is the ONLY tracked dependency; the rest is untracked so refresh()'s async
+  // write to `allFiles` cannot retrigger this effect (which would loop fetches forever).
   $effect(() => {
-    if (open) {
+    if (!open) return;
+    untrack(() => {
       prevFocused = document.activeElement;
       query = "";
       selected = 0;
       queueMicrotask(() => { inputEl?.focus(); inputEl?.select(); });
       refresh();
-    }
+    });
   });
 
   // Keep the selection in range as results change (guarded so it never writes an equal value).
