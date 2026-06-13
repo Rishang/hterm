@@ -1,39 +1,46 @@
 /**
- * Score a path against a query using subsequence matching.
- * Returns { score, positions } where positions are matched char indices into `path`,
- * or null if not every query char can be matched in order.
- * Higher score = better match.
+ * fzf -e style exact matcher.
+ *
+ * The query is split on whitespace into terms (fzf extended-search AND syntax):
+ *   - a plain term must appear as a contiguous, case-insensitive SUBSTRING.
+ *   - a `!term` term is a negation — the path must NOT contain it.
+ * All positive terms must match; any negation must not. Returns { score, positions }
+ * (positions = matched char indices into `path`, for highlighting) or null on no match.
  *
  * @param {string} path
- * @param {string} query  caller passes the trimmed query (may be any case)
+ * @param {string} query  the trimmed query (any case)
  * @returns {{ score: number, positions: number[] } | null}
  */
 export function fuzzyScore(path, query) {
   if (!query) return { score: 0, positions: [] };
   const p = path.toLowerCase();
-  const q = query.toLowerCase();
   const slashIdx = path.lastIndexOf("/");
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   const positions = [];
-  let pi = 0;
-  let qi = 0;
   let score = 0;
-  let prevMatch = -2;
-  while (pi < p.length && qi < q.length) {
-    if (p[pi] === q[qi]) {
-      let s = 1;
-      if (pi === prevMatch + 1) s += 5;                  // consecutive run
-      const prevCh = pi > 0 ? p[pi - 1] : "/";
-      if (/[/_\-. ]/.test(prevCh)) s += 8;               // start of a path/word segment
-      if (pi > slashIdx) s += 3;                         // inside the basename
-      score += s;
-      positions.push(pi);
-      prevMatch = pi;
-      qi++;
+  let matchedAny = false;
+
+  for (const term of terms) {
+    if (term[0] === "!") {
+      const neg = term.slice(1);
+      if (neg && p.includes(neg)) return null; // excluded
+      continue;
     }
-    pi++;
+    const idx = p.indexOf(term);
+    if (idx === -1) return null; // a required term is missing
+    matchedAny = true;
+    for (let i = 0; i < term.length; i++) positions.push(idx + i);
+
+    let s = 10;
+    if (idx > slashIdx) s += 6;                       // match lands in the basename
+    const prevCh = idx > 0 ? p[idx - 1] : "/";
+    if (/[/_\-. ]/.test(prevCh)) s += 8;              // match starts at a segment boundary
+    s -= idx * 0.1;                                    // earlier match is better
+    score += s;
   }
-  if (qi < q.length) return null;                        // query not fully matched
-  score -= path.length * 0.05;                           // mild preference for shorter paths
+
+  if (!matchedAny) return { score: 0, positions: [] }; // only negations → matches all
+  score -= path.length * 0.05;                         // mild preference for shorter paths
   return { score, positions };
 }
 

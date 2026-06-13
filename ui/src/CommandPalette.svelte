@@ -125,7 +125,7 @@
         bind:value={query}
         class="cmdp-input"
         type="text"
-        placeholder="Search files by name…"
+        placeholder="Search files — space = AND, !exclude…"
         aria-label="Search files by name"
         role="combobox"
         aria-expanded="true"
