@@ -485,7 +485,7 @@
   <div id="app-body">
     <!-- Sidebar -->
     <div class="fm-sidebar-wrap" class:hidden={!showSidebar} style:width="{sidebarWidth}px">
-      <FileManager bind:fileTabs {activeTab} {openFileTab} {openFileByPath} visible={showSidebar} />
+      <FileManager bind:fileTabs {activeTab} {openFileByPath} visible={showSidebar} />
     </div>
     <button class="fm-resize-handle" class:hidden={!showSidebar} type="button" aria-label="Resize file explorer"
       onmousedown={onResizeStart}></button>

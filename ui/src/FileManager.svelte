@@ -1,8 +1,8 @@
 <script>
   import { fileIcon } from './fileIcon.js';
 
-  /** @type {{ fileTabs: any[], activeTab: string, openFileTab: Function, openFileByPath: Function, visible?: boolean }} */
-  let { fileTabs, activeTab, openFileTab, openFileByPath, visible = true } = $props();
+  /** @type {{ fileTabs: any[], activeTab: string, openFileByPath: Function, visible?: boolean }} */
+  let { fileTabs, activeTab, openFileByPath, visible = true } = $props();
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
   const SIDEBAR_ROOT_STORAGE_KEY = "hterm:file-manager-root";
