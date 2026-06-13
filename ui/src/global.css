@@ -770,3 +770,70 @@ html, body {
     height: 1px;
   }
 }
+
+/* ── Command palette ─────────────────────────────────────────────────────── */
+.cmdp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgba(0, 0, 0, 0.35);
+}
+.cmdp {
+  width: min(640px, 92vw);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.cmdp-input {
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  font-size: 14px;
+  color: var(--text-bright);
+  background: var(--bg-surface-strong);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  outline: none;
+}
+.cmdp-input::placeholder { color: var(--text-muted); }
+.cmdp-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.cmdp-empty {
+  padding: 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+.cmdp-error { color: var(--status-disconnected); }
+.cmdp-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.cmdp-row.selected { background: var(--accent-dim-strong); }
+.cmdp-name { color: var(--text-bright); font-weight: 600; }
+.cmdp-dir { color: var(--text-muted); font-size: 12px; }
+.cmdp-row mark {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+}
