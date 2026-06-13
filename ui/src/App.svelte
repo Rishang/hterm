@@ -4,6 +4,7 @@
   import FilePane from "./FilePane.svelte";
   import TermTab from "./TermTab.svelte";
   import ShortcutInfo from "./ShortcutInfo.svelte";
+  import CommandPalette from "./CommandPalette.svelte";
   import { fileIcon } from "./fileIcon.js";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
@@ -54,6 +55,43 @@
     tabOrder.push(path);
     lastActiveFileTab = path;
     activeTab = path;
+  }
+
+  let paletteOpen = $state(false);
+
+  /**
+   * Open a file by path: focus an existing tab, or open a loading tab and
+   * fetch its content. Shared by the file sidebar and the command palette.
+   * @param {string} path
+   */
+  async function openFileByPath(path) {
+    if (fileTabs.find(t => t.id === path)) {
+      openFileTab(path, "", false, "");
+      return;
+    }
+    openFileTab(path, "", false, "", true);
+    try {
+      const res = await fetch(`${basePath}/api/files/read?path=${encodeURIComponent(path)}`);
+      if (!res.ok) throw new Error(await res.text());
+      const result = await res.json();
+      const tab = fileTabs.find(t => t.id === path);
+      if (!tab) return;
+      tab.content = result.content ?? "";
+      tab.editContent = tab.content;
+      tab.isBinary = !!result.is_binary;
+      tab.error = "";
+      tab.loading = false;
+      fileTabs = fileTabs;
+    } catch (e) {
+      const tab = fileTabs.find(t => t.id === path);
+      if (!tab) return;
+      tab.content = "";
+      tab.editContent = "";
+      tab.isBinary = false;
+      tab.error = String(e);
+      tab.loading = false;
+      fileTabs = fileTabs;
+    }
   }
 
   function closeFileTab(id) {
@@ -144,8 +182,13 @@
     const prevByAltPage = e.altKey && !e.ctrlKey && !e.metaKey && e.key === "PageUp";
     const nextByBracket = e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "]";
     const prevByBracket = e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "[";
+    const openPalette = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "p" || e.key === "P");
 
-    if (switchType) {
+    if (openPalette) {
+      e.preventDefault();
+      e.stopPropagation();
+      paletteOpen = !paletteOpen;
+    } else if (switchType) {
       e.preventDefault();
       e.stopPropagation();
       switchTabType();
@@ -442,7 +485,7 @@
   <div id="app-body">
     <!-- Sidebar -->
     <div class="fm-sidebar-wrap" class:hidden={!showSidebar} style:width="{sidebarWidth}px">
-      <FileManager bind:fileTabs {activeTab} {openFileTab} visible={showSidebar} />
+      <FileManager bind:fileTabs {activeTab} {openFileByPath} visible={showSidebar} />
     </div>
     <button class="fm-resize-handle" class:hidden={!showSidebar} type="button" aria-label="Resize file explorer"
       onmousedown={onResizeStart}></button>
@@ -487,4 +530,5 @@
       {/if}
     </div>
   </div>
+  <CommandPalette bind:open={paletteOpen} {openFileByPath} />
 </div>
