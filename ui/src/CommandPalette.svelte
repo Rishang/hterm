@@ -14,9 +14,9 @@
   let query = $state("");
   let selected = $state(0);
   /** @type {HTMLInputElement | null} */
-  let inputEl = null;
+  let inputEl = $state(null);
   /** @type {HTMLElement | null} */
-  let listEl = null;
+  let listEl = $state(null);
 
   const results = $derived(fuzzyFilter(allFiles, query.trim(), 50));
 
@@ -104,7 +104,7 @@
 {#if open}
   <div class="cmdp-backdrop" role="presentation" onclick={close}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="cmdp" role="dialog" aria-label="Open file" onclick={(e) => e.stopPropagation()}>
+    <div class="cmdp" role="dialog" aria-label="Open file" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       <input
         bind:this={inputEl}
         bind:value={query}
@@ -138,6 +138,7 @@
               data-idx={i}
               id={`cmdp-opt-${i}`}
               role="option"
+              tabindex="-1"
               aria-selected={i === selected}
               onmouseenter={() => { selected = i; }}
               onclick={() => choose(r.path)}>
