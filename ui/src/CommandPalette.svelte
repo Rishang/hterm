@@ -14,9 +14,9 @@
   let query = $state("");
   let selected = $state(0);
   /** @type {HTMLInputElement | null} */
-  let inputEl = $state(null);
+  let inputEl = null;
   /** @type {HTMLElement | null} */
-  let listEl = $state(null);
+  let listEl = null;
 
   const results = $derived(fuzzyFilter(allFiles, query.trim(), 50));
 
@@ -43,9 +43,10 @@
     }
   });
 
-  // Keep the selection in range as results change.
+  // Keep the selection in range as results change (guarded so it never writes an equal value).
   $effect(() => {
-    if (selected >= results.length) selected = Math.max(0, results.length - 1);
+    const max = Math.max(0, results.length - 1);
+    if (selected > max) selected = max;
   });
 
   function close() { open = false; }
@@ -111,11 +112,15 @@
         type="text"
         placeholder="Search files by name…"
         aria-label="Search files by name"
+        role="combobox"
+        aria-expanded="true"
+        aria-controls="cmdp-listbox"
+        aria-activedescendant={results.length ? `cmdp-opt-${selected}` : undefined}
         autocomplete="off"
         spellcheck="false"
         onkeydown={onKeydown}
       />
-      <div class="cmdp-list" bind:this={listEl} role="listbox" tabindex="-1" aria-label="Files">
+      <div class="cmdp-list" bind:this={listEl} id="cmdp-listbox" role="listbox" tabindex="-1" aria-label="Files">
         {#if loading}
           <div class="cmdp-empty">Indexing files…</div>
         {:else if loadError}
@@ -126,14 +131,15 @@
           {#each results as r, i (r.path)}
             {@const hitSet = new Set(r.positions)}
             {@const slash = r.path.lastIndexOf("/")}
-            <button
-              type="button"
+            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+            <div
               class="cmdp-row"
               class:selected={i === selected}
               data-idx={i}
+              id={`cmdp-opt-${i}`}
               role="option"
               aria-selected={i === selected}
-              onmousemove={() => { if (selected !== i) selected = i; }}
+              onmouseenter={() => { selected = i; }}
               onclick={() => choose(r.path)}>
               {#if slash >= 0}
                 <span class="cmdp-dir">
@@ -143,7 +149,7 @@
               <span class="cmdp-name">
                 {#each segments(r.path, hitSet, slash + 1, r.path.length) as seg}{#if seg.hit}<mark>{seg.text}</mark>{:else}{seg.text}{/if}{/each}
               </span>
-            </button>
+            </div>
           {/each}
         {/if}
       </div>
