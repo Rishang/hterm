@@ -64,12 +64,9 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 |------|-------------|
 | `bash` | Execute bash commands with verbose mode (set -x) |
 | `read_file` | Read file contents as UTF-8 text |
-| `write_file` | Create or overwrite files (max 100MB) |
-| `edit_file` | Edit files by replacing exact text matches |
+| `write_file` | Create or overwrite files (max 100MB); for surgical edits, use `bash` (e.g. sed) |
 | `read_file_metadata` | Get file size, permissions, type, MIME, encoding, format |
-| `list_files` | Detailed directory listings (ls -la) |
 | `list_tree` | Recursive directory tree with depth control |
-| `list_processes` | Running processes (ps aux) |
 
 ---
 
@@ -313,15 +310,14 @@ curl -X POST http://localhost:7681/api/tools/call \
     }
   }'
 
-# Edit a file
+# Write (create or overwrite) a file
 curl -X POST http://localhost:7681/api/tools/call \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "edit_file",
+    "name": "write_file",
     "arguments": {
       "path": "config.js",
-      "oldText": "port: 3000",
-      "newText": "port: 8080"
+      "content": "module.exports = { port: 8080 };\n"
     }
   }'
 ```
@@ -338,7 +334,6 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is a standard for
 
 - 📂 Read and write files
 - 🖥️ Execute commands
-- 📊 List processes
 - 🔍 Explore directories
 - ⚙️ Automate system tasks
 

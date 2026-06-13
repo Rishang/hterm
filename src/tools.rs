@@ -91,7 +91,7 @@ fn tool_read_file() -> Value {
 fn tool_write_file() -> Value {
     json!({
         "name": "write_file",
-        "description": "Create a new file or completely overwrite an existing file with the provided content. Use this for creating new files from scratch. For modifying existing files, prefer 'editFile' instead. Maximum file size: 100MB.",
+        "description": "Create a new file or completely overwrite an existing file with the provided content. Use this for creating new files from scratch and for modifying existing files (read it first, then write back the full updated content). For surgical in-place edits, use the 'bash' tool (e.g. sed). Maximum file size: 100MB.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -119,60 +119,6 @@ fn tool_write_file() -> Value {
     })
 }
 
-fn tool_edit_file() -> Value {
-    json!({
-        "name": "edit_file",
-        "description": "Edit an existing file by replacing exact text matches. This is more efficient than rewriting entire files. You must provide the exact 'oldText' string to find (must be unique in the file) and the 'newText' to replace it with. Use 'replaceAll' to change all occurrences. The file must be read first before editing.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file to edit.",
-                    "examples": ["src/main.rs", "config.yaml", "README.md"]
-                },
-                "oldText": {
-                    "type": "string",
-                    "description": "The exact text to find and replace. Must be unique unless replaceAll is true.",
-                    "examples": [
-                        "const PORT = 3000;",
-                        "fn old_function() {",
-                        "    println!(\"debug\");"
-                    ]
-                },
-                "newText": {
-                    "type": "string",
-                    "description": "The text to replace it with.",
-                    "examples": [
-                        "const PORT = 8080;",
-                        "fn new_function() {",
-                        "    // removed debug statement"
-                    ]
-                },
-                "replaceAll": {
-                    "type": "boolean",
-                    "description": "(Optional) Replace all occurrences instead of requiring uniqueness. Defaults to false.",
-                    "examples": [false, true]
-                }
-            },
-            "required": ["path", "oldText", "newText"],
-            "examples": [
-                {
-                    "path": "config.js",
-                    "oldText": "port: 3000",
-                    "newText": "port: 8080"
-                },
-                {
-                    "path": "src/utils.rs",
-                    "oldText": "TODO",
-                    "newText": "DONE",
-                    "replaceAll": true
-                }
-            ]
-        }
-    })
-}
-
 fn tool_read_file_metadata() -> Value {
     json!({
         "name": "read_file_metadata",
@@ -191,40 +137,6 @@ fn tool_read_file_metadata() -> Value {
                 {"path": "README.md"},
                 {"path": "/tmp/data.bin"},
                 {"path": "hterm"}
-            ]
-        }
-    })
-}
-
-fn tool_list_processes() -> Value {
-    json!({
-        "name": "list_processes",
-        "description": "List all running processes on the host system with details like PID, CPU%, MEM%, user, and command. Equivalent to 'ps aux'. Useful for monitoring background jobs, checking if services are running, or debugging resource usage.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "examples": [{}]
-        }
-    })
-}
-
-fn tool_list_files() -> Value {
-    json!({
-        "name": "list_files",
-        "description": "List all files and directories in a given path with detailed information including permissions, ownership, size, and modification time. Equivalent to 'ls -la'. Use this to browse directory contents.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Directory path to list.",
-                    "examples": [".", "src/", "/home/user", "/var/log"]
-                }
-            },
-            "required": ["path"],
-            "examples": [
-                {"path": "."},
-                {"path": "src/components"}
             ]
         }
     })
@@ -265,10 +177,7 @@ pub fn handle_tools_list() -> Value {
                 tool_bash(),
                 tool_read_file(),
                 tool_write_file(),
-                tool_edit_file(),
                 tool_read_file_metadata(),
-                tool_list_processes(),
-                tool_list_files(),
                 tool_list_tree()
             ]
         })
@@ -303,10 +212,7 @@ fn validate_tool_arguments(tool_name: &str, arguments: &Value) -> Result<(), Str
             ("bash", tool_bash()),
             ("read_file", tool_read_file()),
             ("write_file", tool_write_file()),
-            ("edit_file", tool_edit_file()),
             ("read_file_metadata", tool_read_file_metadata()),
-            ("list_processes", tool_list_processes()),
-            ("list_files", tool_list_files()),
             ("list_tree", tool_list_tree()),
         ])
     });
@@ -444,10 +350,7 @@ pub async fn call_tool(name: &str, arguments: &Value, cfg: &AppConfig) -> Result
         "bash" => bash_tool(arguments, cfg).await,
         "read_file" => read_file_tool(arguments).await,
         "write_file" => write_file_tool(arguments, cfg).await,
-        "edit_file" => edit_file_tool(arguments, cfg).await,
         "read_file_metadata" => read_file_metadata_tool(arguments).await,
-        "list_processes" => list_processes_tool().await,
-        "list_files" => list_files_tool(arguments).await,
         "list_tree" => list_tree_tool(arguments, cfg).await,
         other => Err(format!("Unknown tool: {}", other)),
     }
@@ -681,81 +584,6 @@ async fn write_file_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String>
 
     match tokio::fs::write(&path, content).await {
         Ok(_) => Ok(tool_success(format!("Successfully wrote to '{}'", path))),
-        Err(e) => Ok(tool_error(format!("Failed to write '{}': {}", path, e))),
-    }
-}
-
-/// Edit a file by replacing exact text matches (like Claude Code's Edit tool).
-async fn edit_file_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
-    if !cfg.writable {
-        return Ok(tool_error(
-            "Edit operations are disabled (hterm is running in read-only mode). \
-             Restart with --writable to enable."
-                .into(),
-        ));
-    }
-
-    let path = extract_string(args, "path")?;
-    let old_text = extract_string(args, "oldText")?;
-    let new_text = extract_string(args, "newText")?;
-    let replace_all = args
-        .get("replaceAll")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    // Guard against huge files
-    if let Ok(m) = tokio::fs::metadata(&path).await {
-        if m.len() > MAX_READ_FILE {
-            return Ok(tool_error(format!(
-                "File '{}' is too large ({} bytes, max {} MiB)",
-                path, m.len(), MAX_READ_FILE / (1024 * 1024)
-            )));
-        }
-    }
-
-    // Read the file
-    let content = match tokio::fs::read_to_string(&path).await {
-        Ok(c) => c,
-        Err(e) => return Ok(tool_error(format!("Failed to read '{}': {}", path, e))),
-    };
-
-    // Check if old_text exists
-    if !content.contains(&old_text) {
-        return Ok(tool_error(format!(
-            "Text not found in '{}'. Looking for:\n{}",
-            path, old_text
-        )));
-    }
-
-    // Check uniqueness if not replace_all
-    if !replace_all {
-        let occurrences = content.matches(&old_text).count();
-        if occurrences > 1 {
-            return Ok(tool_error(format!(
-                "Text appears {} times in '{}'. Use replaceAll: true to replace all occurrences, \
-                 or provide a unique text match.",
-                occurrences, path
-            )));
-        }
-    }
-
-    // Perform replacement
-    let new_content = if replace_all {
-        content.replace(&old_text, &new_text)
-    } else {
-        content.replacen(&old_text, &new_text, 1)
-    };
-
-    // Write back
-    match tokio::fs::write(&path, new_content).await {
-        Ok(_) => {
-            let msg = if replace_all {
-                format!("Successfully replaced all occurrences in '{}'", path)
-            } else {
-                format!("Successfully edited '{}'", path)
-            };
-            Ok(tool_success(msg))
-        }
         Err(e) => Ok(tool_error(format!("Failed to write '{}': {}", path, e))),
     }
 }
@@ -1042,19 +870,6 @@ fn is_utf8(bytes: &[u8]) -> bool {
 /// Check if content is pure ASCII
 fn is_ascii(bytes: &[u8]) -> bool {
     bytes.iter().all(|&b| b.is_ascii())
-}
-
-async fn list_processes_tool() -> Result<Value, String> {
-    let mut cmd = tokio::process::Command::new("ps");
-    cmd.arg("aux");
-    run_simple_command_with_timeout(cmd, "ps", 10).await
-}
-
-async fn list_files_tool(args: &Value) -> Result<Value, String> {
-    let path = extract_string(args, "path")?;
-    let mut cmd = tokio::process::Command::new("ls");
-    cmd.arg("-la").arg(&path);
-    run_simple_command_with_timeout(cmd, "ls", 10).await
 }
 
 async fn list_tree_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {

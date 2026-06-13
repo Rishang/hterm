@@ -161,20 +161,6 @@ paths:
                           type: string
                           description: File path to read
                       required: [path]
-                  - name: edit_file
-                    description: Edit file by replacing exact text matches
-                    inputSchema:
-                      type: object
-                      properties:
-                        path:
-                          type: string
-                        oldText:
-                          type: string
-                        newText:
-                          type: string
-                        replaceAll:
-                          type: boolean
-                      required: [path, oldText, newText]
                   - name: read_file_metadata
                     description: Get file metadata including size, permissions, modification time
                     inputSchema:
@@ -190,8 +176,7 @@ paths:
       description: |
         Call a tool by name with arguments. Returns tool output in MCP format.
 
-        **Available tools**: bash, read_file, write_file, edit_file, read_file_metadata,
-        list_processes, list_files, list_tree
+        **Available tools**: bash, read_file, write_file, read_file_metadata, list_tree
       tags:
         - tools
       security:
@@ -224,26 +209,12 @@ paths:
                   arguments:
                     path: "/tmp/test.txt"
                     content: "Hello, World!"
-              edit_file:
-                summary: Edit file
-                value:
-                  name: edit_file
-                  arguments:
-                    path: "config.js"
-                    oldText: "port: 3000"
-                    newText: "port: 8080"
               read_file_metadata:
                 summary: Get file metadata
                 value:
                   name: read_file_metadata
                   arguments:
                     path: "/tmp/test.txt"
-              list_files:
-                summary: List directory
-                value:
-                  name: list_files
-                  arguments:
-                    path: "/home"
       responses:
         '200':
           description: Tool executed successfully
