@@ -6,6 +6,7 @@
     && /Mac|iPhone|iPad|iPod/.test(navigator.userAgentData?.platform || navigator.platform || "");
 
   const shortcutHints = isMacOS ? [
+    ["Cmd + P", "Open file (command palette)"],
     ["Ctrl + `", "Switch between terminal and file tabs"],
     ["Cmd + Shift + [", "Previous tab"],
     ["Cmd + Shift + ]", "Next tab"],
@@ -16,6 +17,7 @@
     ["Ctrl + Shift + C", "Copy terminal selection"],
     ["Ctrl + Shift + V", "Paste into terminal"],
   ] : [
+    ["Ctrl + P", "Open file (command palette)"],
     ["Ctrl + `", "Switch between terminal and file tabs"],
     ["Ctrl/Alt + PageUp", "Previous tab"],
     ["Ctrl/Alt + PageDown", "Next tab"],
