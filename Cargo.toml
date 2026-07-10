@@ -10,7 +10,6 @@ axum        = { version = "0.8",  features = ["ws"] }
 axum-server = { version = "0.7",  features = ["tls-rustls"] }
 tokio       = { version = "1",    features = ["rt", "macros", "net", "sync", "time", "io-util", "io-std", "fs", "signal", "process"] }
 bytes       = "1"                            # zero-copy slices; used directly in ws.rs
-snmalloc-rs = "0.3"
 serde       = { version = "1",    features = ["derive"] }
 serde_json  = "1"
 serde_yaml  = "0.9"
@@ -24,7 +23,6 @@ rust-embed  = { version = "8",    features = ["mime-guess"] }
 mime_guess  = "2"
 uuid = { version = "1.23.0", default-features = false, features = ["v4"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
-infer = "0.16"  # File type detection from magic bytes
 
 [profile.release]
 opt-level     = "z"     # optimise for binary size

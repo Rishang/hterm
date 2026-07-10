@@ -65,8 +65,6 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 | `bash` | Execute bash commands with verbose mode (set -x) |
 | `read_file` | Read file contents as UTF-8 text |
 | `write_file` | Create or overwrite files (max 100MB); for surgical edits, use `bash` (e.g. sed) |
-| `read_file_metadata` | Get file size, permissions, type, MIME, encoding, format |
-| `list_tree` | Recursive directory tree with depth control |
 
 ---
 

@@ -1,11 +1,11 @@
 use axum::http::HeaderMap;
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+
 use crate::config::AppConfig;
 use crate::ws::AppState;
 
@@ -38,30 +38,18 @@ fn tool_bash() -> Value {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The bash command or script to execute. Supports pipes, redirects, and multiline scripts.",
-                    "examples": [
-                        "ls -la",
-                        "cat package.json | jq .version",
-                        "npm install && npm test",
-                        "for i in {1..3}; do echo $i; done"
-                    ]
+                    "description": "The bash command or script to execute. Supports pipes, redirects, and multiline scripts."
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "(Optional) Working directory to run the command in.",
-                    "examples": ["/home/user/project", "./src", "/tmp"]
+                    "description": "(Optional) Working directory to run the command in."
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "(Optional) Timeout in seconds (1-3600, default 300).",
-                    "examples": [60, 300, 600]
+                    "description": "(Optional) Timeout in seconds (1-3600, default 300)."
                 }
             },
-            "required": ["command"],
-            "examples": [
-                {"command": "git status"},
-                {"command": "npm test", "cwd": "/home/user/project", "timeout": 120}
-            ]
+            "required": ["command"]
         }
     })
 }
@@ -75,15 +63,10 @@ fn tool_read_file() -> Value {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute or relative path to the file.",
-                    "examples": ["README.md", "src/main.rs", "/etc/hosts", "package.json"]
+                    "description": "Absolute or relative path to the file."
                 }
             },
-            "required": ["path"],
-            "examples": [
-                {"path": "README.md"},
-                {"path": "src/lib.rs"}
-            ]
+            "required": ["path"]
         }
     })
 }
@@ -97,78 +80,17 @@ fn tool_write_file() -> Value {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path where the file should be written.",
-                    "examples": ["output.txt", "src/new_module.rs", "/tmp/data.json"]
+                    "description": "Path where the file should be written."
                 },
                 "content": {
                     "type": "string",
-                    "description": "The complete text content to write.",
-                    "examples": [
-                        "Hello, world!",
-                        "{\"key\": \"value\"}",
-                        "fn main() {\n    println!(\"Hello!\");\n}"
-                    ]
+                    "description": "The complete text content to write."
                 }
             },
-            "required": ["path", "content"],
-            "examples": [
-                {"path": "test.txt", "content": "Hello, world!"},
-                {"path": "config.json", "content": "{\"debug\": true}"}
-            ]
+            "required": ["path", "content"]
         }
     })
 }
-
-fn tool_read_file_metadata() -> Value {
-    json!({
-        "name": "read_file_metadata",
-        "description": "Get comprehensive metadata about a file including size, permissions, modification time, and detailed file type detection (via 'file' command). Shows MIME type, encoding, binary format, and other file characteristics. Useful for checking file properties before reading large files or verifying file attributes.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file or directory.",
-                    "examples": ["package.json", "/var/log/app.log", "src/", "image.png", "binary-file"]
-                }
-            },
-            "required": ["path"],
-            "examples": [
-                {"path": "README.md"},
-                {"path": "/tmp/data.bin"},
-                {"path": "hterm"}
-            ]
-        }
-    })
-}
-
-fn tool_list_tree() -> Value {
-    json!({
-        "name": "list_tree",
-        "description": "Generate a recursive tree view of files and directories from a root path. Shows the complete directory structure up to a specified depth. Uses 'tree' command if available, otherwise falls back to 'find' with formatting.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Root directory for the tree.",
-                    "examples": [".", "src/", "/home/user/project"]
-                },
-                "maxDepth": {
-                    "type": "integer",
-                    "description": "(Optional) Maximum depth to traverse (1-20, default 3).",
-                    "examples": [2, 3, 5]
-                }
-            },
-            "required": ["path"],
-            "examples": [
-                {"path": "."},
-                {"path": "src", "maxDepth": 2}
-            ]
-        }
-    })
-}
-
 
 pub fn handle_tools_list() -> Value {
     static TOOLS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
@@ -176,9 +98,7 @@ pub fn handle_tools_list() -> Value {
             "tools": [
                 tool_bash(),
                 tool_read_file(),
-                tool_write_file(),
-                tool_read_file_metadata(),
-                tool_list_tree()
+                tool_write_file()
             ]
         })
     });
@@ -203,212 +123,109 @@ pub fn check_auth(state: &AppState, headers: &HeaderMap) -> bool {
     }
 }
 
-/// Validate tool arguments and provide detailed error messages
-fn validate_tool_arguments(tool_name: &str, arguments: &Value) -> Result<(), String> {
-    use std::collections::HashMap;
-
-    static TOOL_DEFS: std::sync::LazyLock<HashMap<&'static str, Value>> = std::sync::LazyLock::new(|| {
-        HashMap::from([
-            ("bash", tool_bash()),
-            ("read_file", tool_read_file()),
-            ("write_file", tool_write_file()),
-            ("read_file_metadata", tool_read_file_metadata()),
-            ("list_tree", tool_list_tree()),
-        ])
-    });
-
-    let tool_def = match TOOL_DEFS.get(tool_name) {
-        Some(def) => def,
-        None => return Ok(()),
-    };
-
-    let schema = tool_def.get("inputSchema").unwrap();
-    let properties = schema.get("properties").and_then(Value::as_object);
-    let required_fields = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let examples = schema.get("examples");
-
-    let args_obj = match arguments.as_object() {
-        Some(obj) => obj,
-        None => {
-            return Err(format!(
-                "❌ Invalid arguments for tool '{}'.\n\n\
-                 Expected: JSON object\n\
-                 Received: {}\n\n\
-                 Examples:\n{}\n\n\
-                 Full schema:\n{}",
-                tool_name,
-                arguments,
-                examples.map(|e| format!("{:#}", e)).unwrap_or_else(|| "N/A".to_string()),
-                serde_json::to_string_pretty(schema).unwrap_or_default()
-            ));
-        }
-    };
-
-    // Check for missing required fields
-    let mut missing_fields = Vec::new();
-    for field in &required_fields {
-        if !args_obj.contains_key(*field) {
-            missing_fields.push(*field);
-        }
-    }
-
-    if !missing_fields.is_empty() {
-        let field_list = missing_fields.join(", ");
-        return Err(format!(
-            "❌ Missing required field(s) for tool '{}': {}\n\n\
-             Received arguments:\n{}\n\n\
-             Examples:\n{}\n\n\
-             Full schema:\n{}",
-            tool_name,
-            field_list,
-            serde_json::to_string_pretty(arguments).unwrap_or_default(),
-            examples.map(|e| format!("{:#}", e)).unwrap_or_else(|| "N/A".to_string()),
-            serde_json::to_string_pretty(schema).unwrap_or_default()
-        ));
-    }
-
-    // Check for type mismatches
-    if let Some(props) = properties {
-        for (key, value) in args_obj {
-            if let Some(prop_schema) = props.get(key) {
-                let expected_type = prop_schema.get("type").and_then(Value::as_str);
-                let actual_type = match value {
-                    Value::String(_) => "string",
-                    Value::Number(_) => "number",
-                    Value::Bool(_) => "boolean",
-                    Value::Array(_) => "array",
-                    Value::Object(_) => "object",
-                    Value::Null => "null",
-                };
-
-                if let Some(expected) = expected_type {
-                    let type_matches = match expected {
-                        "string" => value.is_string(),
-                        "integer" | "number" => value.is_number(),
-                        "boolean" => value.is_boolean(),
-                        "array" => value.is_array(),
-                        "object" => value.is_object(),
-                        _ => true,
-                    };
-
-                    if !type_matches {
-                        let prop_examples = prop_schema.get("examples");
-                        return Err(format!(
-                            "❌ Type mismatch for field '{}' in tool '{}'.\n\n\
-                             Expected type: {}\n\
-                             Actual type: {}\n\
-                             Received value: {}\n\n\
-                             Valid examples for this field:\n{}\n\n\
-                             Complete examples:\n{}\n\n\
-                             Full schema:\n{}",
-                            key,
-                            tool_name,
-                            expected,
-                            actual_type,
-                            value,
-                            prop_examples.map(|e| format!("{:#}", e)).unwrap_or_else(|| "N/A".to_string()),
-                            examples.map(|e| format!("{:#}", e)).unwrap_or_else(|| "N/A".to_string()),
-                            serde_json::to_string_pretty(schema).unwrap_or_default()
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    // Check for unexpected fields (warning, not error)
-    if let Some(props) = properties {
-        let unexpected: Vec<_> = args_obj
-            .keys()
-            .filter(|k| !props.contains_key(*k))
-            .collect();
-
-        if !unexpected.is_empty() {
-            tracing::warn!(
-                tool = %tool_name,
-                fields = ?unexpected,
-                "Unexpected fields in tool call (will be ignored)"
-            );
-        }
-    }
-
-    Ok(())
-}
-
 /// Call a tool by name with arguments directly (no "arguments" wrapper needed)
 pub async fn call_tool(name: &str, arguments: &Value, cfg: &AppConfig) -> Result<Value, String> {
-    // Validate arguments before calling the tool
-    if let Err(validation_error) = validate_tool_arguments(name, arguments) {
-        return Err(validation_error);
-    }
-
     match name {
         "bash" => bash_tool(arguments, cfg).await,
         "read_file" => read_file_tool(arguments).await,
         "write_file" => write_file_tool(arguments, cfg).await,
-        "read_file_metadata" => read_file_metadata_tool(arguments).await,
-        "list_tree" => list_tree_tool(arguments, cfg).await,
         other => Err(format!("Unknown tool: {}", other)),
     }
 }
 
 // ── Tool implementations ──────────────────────────────────────────────────────
 
-/// Helper to run a command with a timeout and standardized error handling.
-async fn run_simple_command_with_timeout(
-    mut cmd: tokio::process::Command,
-    cmd_name: &str,
-    timeout_secs: u64,
-) -> Result<Value, String> {
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
+/// Captured result of running a child process: the (capped) output streams,
+/// the exit status if it finished, and whether it was killed for exceeding the
+/// timeout. This is the shared "base exec" primitive; callers format it into
+/// their own response shape (MCP tool result, JSON, etc.).
+pub(crate) struct CommandCapture {
+    pub(crate) stdout: CappedOutput,
+    pub(crate) stderr: CappedOutput,
+    pub(crate) status: Option<std::process::ExitStatus>,
+    pub(crate) timed_out: bool,
+}
 
+/// Spawn `cmd` with stdout/stderr piped, enforce `timeout_secs`, and capture
+/// combined-capped output. Returns `Err` only when the process cannot be
+/// spawned; a timeout yields `Ok` with `timed_out = true` (child is killed).
+pub(crate) async fn run_command_captured(
+    mut cmd: tokio::process::Command,
+    timeout_secs: u64,
+) -> Result<CommandCapture, String> {
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return Ok(tool_error(format!("Failed to spawn {}: {}", cmd_name, e))),
-    };
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
-    match tokio::time::timeout(timeout, async {
+    match tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), async {
         let budget = output_budget(MAX_CMD_OUTPUT_TOTAL);
-        let (out, err, wait) = tokio::join!(
+        tokio::join!(
             read_capped_text(stdout_pipe, Arc::clone(&budget)),
             read_capped_text(stderr_pipe, budget),
             child.wait()
-        );
-        (out, err, wait)
-    }).await {
-        Ok((out, err, wait)) => {
-            let mut text = out.text;
-            if out.truncated {
-                text.push_str("\n... (stdout truncated; combined output limit reached)");
-            }
-            if !err.text.is_empty() {
-                if !text.is_empty() { text.push_str("\n--- stderr ---\n"); }
-                text.push_str(&err.text);
-            }
-            if err.truncated {
-                text.push_str("\n... (stderr truncated; combined output limit reached)");
-            }
-            if text.is_empty() { text = "(no output)".into(); }
-            if wait.map(|s| s.success()).unwrap_or(false) {
-                Ok(tool_success(text))
-            } else {
-                Ok(tool_error(text))
-            }
-        }
+        )
+    })
+    .await
+    {
+        Ok((stdout, stderr, wait)) => Ok(CommandCapture {
+            stdout,
+            stderr,
+            status: wait.ok(),
+            timed_out: false,
+        }),
         Err(_) => {
             let _ = child.kill().await;
-            Ok(tool_error(format!("{} command timed out after {}s", cmd_name, timeout_secs)))
+            Ok(CommandCapture {
+                stdout: CappedOutput { text: String::new(), truncated: false },
+                stderr: CappedOutput { text: String::new(), truncated: false },
+                status: None,
+                timed_out: true,
+            })
         }
     }
+}
+
+/// Run a command with a timeout, capping combined stdout/stderr and reporting
+/// success/failure as an MCP tool result.
+async fn run_command(
+    cmd: tokio::process::Command,
+    cmd_name: &str,
+    timeout_secs: u64,
+) -> Result<Value, String> {
+    let capture = match run_command_captured(cmd, timeout_secs).await {
+        Ok(c) => c,
+        Err(e) => return Ok(tool_error(format!("Failed to spawn {}: {}", cmd_name, e))),
+    };
+
+    if capture.timed_out {
+        return Ok(tool_error(format!(
+            "{} command timed out after {}s",
+            cmd_name, timeout_secs
+        )));
+    }
+
+    let mut text = capture.stdout.text;
+    if capture.stdout.truncated {
+        text.push_str("\n... (stdout truncated; combined output limit reached)");
+    }
+    if !capture.stderr.text.is_empty() {
+        if !text.is_empty() {
+            text.push_str("\n--- stderr ---\n");
+        }
+        text.push_str(&capture.stderr.text);
+    }
+    if capture.stderr.truncated {
+        text.push_str("\n... (stderr truncated; combined output limit reached)");
+    }
+    if text.is_empty() {
+        text = "(no output)".into();
+    }
+    let ok = capture.status.map(|s| s.success()).unwrap_or(false);
+    tracing::info!(tool = cmd_name, success = ok, "command finished");
+    Ok(if ok { tool_success(text) } else { tool_error(text) })
 }
 
 /// Execute bash commands with verbose mode (set -x) enabled.
@@ -428,13 +245,10 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
         .clamp(1, 3600);
 
     let mut cmd = tokio::process::Command::new("bash");
-    // Pre-size to avoid reallocation during format
     let mut verbose_command = String::with_capacity(7 + command.len());
     verbose_command.push_str("set -x\n");
     verbose_command.push_str(&command);
     cmd.arg("-c").arg(&verbose_command);
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
 
     if !cwd.is_empty() {
         cmd.current_dir(&cwd);
@@ -449,65 +263,7 @@ async fn bash_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
         cmd.gid(gid);
     }
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return Ok(tool_error(format!("Failed to spawn bash: {}", e))),
-    };
-
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let result = tokio::time::timeout(timeout, async {
-        let budget = output_budget(MAX_CMD_OUTPUT_TOTAL);
-        let (stdout, stderr, wait_res) = tokio::join!(
-            read_capped_text(stdout_pipe, Arc::clone(&budget)),
-            read_capped_text(stderr_pipe, budget),
-            child.wait()
-        );
-        (stdout, stderr, wait_res)
-    })
-    .await;
-
-    let (stdout, stderr, wait_res) = match result {
-        Ok(t) => t,
-        Err(_) => {
-            // Kill the child on timeout so it doesn't linger.
-            let _ = child.kill().await;
-            return Ok(tool_error(format!(
-                "Bash command timed out after {}s",
-                timeout_secs
-            )));
-        }
-    };
-
-    let status = wait_res.ok();
-    let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
-
-    let mut text = stdout.text;
-    if stdout.truncated {
-        text.push_str("\n... (stdout truncated; combined output limit reached)");
-    }
-    if !stderr.text.is_empty() {
-        if !text.is_empty() {
-            text.push_str("\n--- stderr ---\n");
-        }
-        text.push_str(&stderr.text);
-    }
-    if stderr.truncated {
-        text.push_str("\n... (stderr truncated; combined output limit reached)");
-    }
-    if text.is_empty() {
-        text = "(no output)".into();
-    }
-
-    let is_error = !status.map(|s| s.success()).unwrap_or(false);
-    tracing::info!(exit_code, "bash tool finished");
-
-    Ok(json!({
-        "content": [{ "type": "text", "text": text }],
-        "isError": is_error
-    }))
+    run_command(cmd, "bash", timeout_secs).await
 }
 
 async fn read_file_tool(args: &Value) -> Result<Value, String> {
@@ -551,7 +307,7 @@ pub(crate) async fn read_file_content(path: &str) -> Result<FileRead, String> {
         .await
         .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
     let sample_len = bytes.len().min(FILE_TYPE_SAMPLE_SIZE);
-    if sample_is_binary(&bytes[..sample_len]) {
+    if !is_text_content(&bytes[..sample_len]) {
         return Ok(FileRead::Binary { size: meta.len() });
     }
 
@@ -588,18 +344,7 @@ async fn write_file_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String>
     }
 }
 
-async fn read_file_metadata_tool(args: &Value) -> Result<Value, String> {
-    let path = extract_string(args, "path")?;
-
-    match tokio::fs::metadata(&path).await {
-        Ok(meta) => Ok(tool_success(format_file_metadata(&path, &meta).await)),
-        Err(e) => Ok(tool_error(format!(
-            "Failed to read metadata of '{}': {}",
-            path, e
-        ))),
-    }
-}
-
+/// Format metadata for the binary-file branch of `read_file`.
 async fn format_file_metadata(path: &str, meta: &std::fs::Metadata) -> String {
     let file_type = if meta.is_dir() {
         "directory"
@@ -611,13 +356,7 @@ async fn format_file_metadata(path: &str, meta: &std::fs::Metadata) -> String {
         "other"
     };
 
-    let permissions = if cfg!(unix) {
-        format!("{:o}", meta.permissions().mode() & 0o777)
-    } else {
-        "N/A".to_string()
-    };
-
-    let readonly = meta.permissions().readonly();
+    let permissions = format!("{:o}", meta.permissions().mode() & 0o777);
 
     let modified = meta
         .modified()
@@ -637,207 +376,30 @@ async fn format_file_metadata(path: &str, meta: &std::fs::Metadata) -> String {
          Type: {}\n\
          Size: {} bytes\n\
          Permissions: {}\n\
-         Read-only: {}\n\
          Modified: {} (unix timestamp)\n\
          File Info: {}",
         path,
         file_type,
         meta.len(),
         permissions,
-        readonly,
         modified,
         file_info
     )
 }
 
-fn sample_is_binary(sample: &[u8]) -> bool {
-    if sample.is_empty() {
-        return false;
-    }
-
-    if !is_text_content(sample) {
-        return true;
-    }
-
-    infer::get(sample).is_some_and(|kind| {
-        let mime = kind.mime_type();
-        !(mime.starts_with("text/") || mime == "application/json" || mime.ends_with("+xml"))
-    })
-}
-
-/// Detect file type using magic bytes (via infer crate) and MIME type guessing.
-/// Only reads the first 8 KiB of the file to avoid loading large files into memory.
+/// Detect file type via the `file` command, falling back to extension-based MIME.
 async fn detect_file_type(path: &str) -> String {
-    use tokio::io::AsyncReadExt;
-
-    let path_obj = Path::new(path);
-
-    // Get MIME type from extension as fallback
-    let mime_from_ext = mime_guess::from_path(path_obj)
-        .first()
-        .map(|m| m.to_string())
-        .unwrap_or_else(|| "application/octet-stream".to_string());
-
-    let mut details = Vec::new();
-
-    // Read only the first 8 KiB — enough for magic bytes, shebangs, and encoding detection
-    let mut file = match tokio::fs::File::open(path).await {
-        Ok(f) => f,
-        Err(e) => return format!("unable to read file: {}", e),
-    };
-    let mut sample = vec![0u8; FILE_TYPE_SAMPLE_SIZE];
-    let n = match file.read(&mut sample).await {
-        Ok(0) => return "empty file".to_string(),
-        Ok(n) => n,
-        Err(e) => return format!("unable to read file: {}", e),
-    };
-    sample.truncate(n);
-
-    // Check for ELF first to add detailed info
-    let is_elf = sample.len() >= 18 && sample.starts_with(&[0x7F, b'E', b'L', b'F']);
-
-    // Use infer crate for magic byte detection
-    if let Some(kind) = infer::get(&sample) {
-        details.push(format!("type: {}", kind.mime_type()));
-
-        // Add ELF-specific details if it's an ELF file
-        if is_elf || kind.extension() == "elf" {
-            if let Some(elf_info) = parse_elf_details(&sample) {
-                details.push(elf_info);
-            }
-        } else {
-            details.push(format!("extension: .{}", kind.extension()));
+    let out = tokio::process::Command::new("file")
+        .arg("-b")
+        .arg("--")
+        .arg(path)
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() && !o.stdout.is_empty() => {
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
         }
-
-        // Add human-readable description based on type
-        let category = match kind.matcher_type() {
-            infer::MatcherType::App => "application",
-            infer::MatcherType::Archive => "archive",
-            infer::MatcherType::Audio => "audio",
-            infer::MatcherType::Book => "ebook",
-            infer::MatcherType::Doc => "document",
-            infer::MatcherType::Font => "font",
-            infer::MatcherType::Image => "image",
-            infer::MatcherType::Video => "video",
-            infer::MatcherType::Custom => "custom",
-            _ => "unknown",
-        };
-        details.push(format!("category: {}", category));
-    } else if is_elf {
-        // ELF not detected by infer, parse manually
-        details.push("type: application/x-executable".to_string());
-        if let Some(elf_info) = parse_elf_details(&sample) {
-            details.push(elf_info);
-        }
-    } else if is_text_content(&sample) {
-        // Text file
-        details.push("type: text/plain".to_string());
-
-        // Detect encoding from the sample (avoids reading entire file)
-        if is_utf8(&sample) {
-            details.push("encoding: UTF-8".to_string());
-        } else if is_ascii(&sample) {
-            details.push("encoding: ASCII".to_string());
-        } else {
-            details.push("encoding: unknown".to_string());
-        }
-
-        // Check for script shebangs
-        if let Some(shebang) = detect_shebang(&sample) {
-            details.push(format!("script: {}", shebang));
-        }
-    } else {
-        // Unknown binary
-        details.push(format!("type: {} (from extension)", mime_from_ext));
-        details.push("category: binary (unknown format)".to_string());
-    }
-
-    details.join(", ")
-}
-
-fn elf_u16(bytes: &[u8], offset: usize, little_endian: bool) -> Option<u16> {
-    let hi = *bytes.get(offset)?;
-    let lo = *bytes.get(offset + 1)?;
-    Some(if little_endian { u16::from_le_bytes([hi, lo]) } else { u16::from_be_bytes([hi, lo]) })
-}
-
-/// Parse ELF file details (architecture, endianness, type)
-fn parse_elf_details(bytes: &[u8]) -> Option<String> {
-    if bytes.len() < 18 || !bytes.starts_with(&[0x7F, b'E', b'L', b'F']) {
-        return None;
-    }
-
-    let class = match bytes.get(4) {
-        Some(1) => "32-bit",
-        Some(2) => "64-bit",
-        _ => "unknown-bit",
-    };
-
-    let little_endian = bytes.get(5).copied() == Some(1);
-    let endian = if little_endian { "LSB" } else { "MSB" };
-
-    let os_abi = match bytes.get(7) {
-        Some(0) => "SYSV",
-        Some(3) => "Linux",
-        Some(9) => "FreeBSD",
-        Some(2) => "NetBSD",
-        _ => "Unix",
-    };
-
-    let exec_type = match elf_u16(bytes, 16, little_endian) {
-        Some(1) => "relocatable",
-        Some(2) => "executable",
-        Some(3) => "shared object",
-        Some(4) => "core dump",
-        _ => "unknown",
-    };
-
-    let machine = match elf_u16(bytes, 18, little_endian) {
-        Some(0x03) => "x86",
-        Some(0x3E) => "x86-64",
-        Some(0x28) => "ARM",
-        Some(0xB7) => "AArch64",
-        Some(0xF3) => "RISC-V",
-        _ => "",
-    };
-
-    let mut parts = vec![class, endian];
-    if !machine.is_empty() {
-        parts.push(machine);
-    }
-    parts.push(exec_type);
-    parts.push(os_abi);
-
-    Some(parts.join(" "))
-}
-
-/// Detect script type from shebang line
-fn detect_shebang(bytes: &[u8]) -> Option<String> {
-    if !bytes.starts_with(b"#!") {
-        return None;
-    }
-
-    let first_line = bytes.iter()
-        .take_while(|&&b| b != b'\n')
-        .copied()
-        .collect::<Vec<u8>>();
-
-    let shebang = String::from_utf8_lossy(&first_line);
-
-    if shebang.contains("bash") {
-        Some("bash".to_string())
-    } else if shebang.contains("sh") {
-        Some("shell".to_string())
-    } else if shebang.contains("python") {
-        Some("python".to_string())
-    } else if shebang.contains("node") {
-        Some("node.js".to_string())
-    } else if shebang.contains("ruby") {
-        Some("ruby".to_string())
-    } else if shebang.contains("perl") {
-        Some("perl".to_string())
-    } else {
-        Some(shebang.trim().to_string())
+        _ => mime_guess::from_path(path).first_or_octet_stream().to_string(),
     }
 }
 
@@ -862,38 +424,6 @@ fn is_text_content(bytes: &[u8]) -> bool {
     (printable_count as f64 / check_len as f64) > 0.85
 }
 
-/// Check if content is valid UTF-8
-fn is_utf8(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes).is_ok()
-}
-
-/// Check if content is pure ASCII
-fn is_ascii(bytes: &[u8]) -> bool {
-    bytes.iter().all(|&b| b.is_ascii())
-}
-
-async fn list_tree_tool(args: &Value, cfg: &AppConfig) -> Result<Value, String> {
-    let path = extract_string(args, "path")?;
-    let max_depth = args
-        .get("maxDepth")
-        .and_then(Value::as_u64)
-        .unwrap_or(3)
-        .clamp(1, 20);
-
-    let tree_cmd = format!(
-        "tree -L {depth} -- {path} 2>/dev/null || \
-         find {path} -maxdepth {depth} | sort | \
-         awk -F/ '{{indent=\"\"; for(i=NF-1;i>0;i--) indent=indent\"  \"; print indent $NF}}'",
-        depth = max_depth,
-        path = shell_escape(&path),
-    );
-
-    let mut cmd = tokio::process::Command::new(&cfg.shell);
-    cmd.arg("-c").arg(&tree_cmd);
-    run_simple_command_with_timeout(cmd, "tree/find", 10).await
-}
-
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn extract_string(args: &Value, key: &str) -> Result<String, String> {
@@ -915,10 +445,6 @@ fn tool_error(msg: String) -> Value {
         "content": [{ "type": "text", "text": msg }],
         "isError": true
     })
-}
-
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 pub(crate) struct CappedOutput {
