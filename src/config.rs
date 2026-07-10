@@ -3,24 +3,13 @@ use std::fs;
 use std::path::Path;
 
 /// Terminal font settings exposed to the browser.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThemeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u16>,
-}
-
-impl Default for ThemeConfig {
-    fn default() -> Self {
-        Self {
-            // No defaults — let xterm.js / the browser pick the system monospace
-            // font and size. Users can still override via config.json.
-            font_family: None,
-            font_size:   None,
-        }
-    }
 }
 
 /// Full application configuration loaded from `config.json`.

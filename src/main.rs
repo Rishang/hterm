@@ -5,10 +5,6 @@ mod rest;
 mod tools;
 mod ws;
 
-#[global_allocator]
-// static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
-
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -165,13 +161,6 @@ struct Cli {
     #[arg(long, default_value = "config.json")]
     config: String,
 
-    /// Run as an MCP (Model Context Protocol) server over stdio instead of
-    /// starting the HTTP/WebSocket terminal server.  AI clients such as
-    /// Claude Desktop connect to hterm by launching it with this flag and
-    /// communicating via JSON-RPC 2.0 on stdin/stdout.
-    #[arg(long = "mcp")]
-    mcp: bool,
-
     /// Optional command to run instead of the configured shell (positional)
     #[arg(trailing_var_arg = true)]
     command: Vec<String>,
@@ -241,10 +230,6 @@ async fn main() {
     if !cfg.cwd.is_empty() && !Path::new(&cfg.cwd).is_dir() {
         tracing::error!("Working directory not valid: {}", cfg.cwd);
         std::process::exit(1);
-    }
-
-    if cli.mcp {
-        tracing::info!("Note: --mcp flag used, but MCP is now served over the main HTTP server via SSE (port: {}).", cfg.port);
     }
 
     if cfg.ssl && (cfg.ssl_cert.is_empty() || cfg.ssl_key.is_empty()) {
@@ -532,8 +517,9 @@ async fn serve_config(json: &'static str) -> impl IntoResponse {
 
 async fn serve_openapi() -> impl IntoResponse {
     static OPENAPI_JSON: std::sync::LazyLock<Option<&'static str>> = std::sync::LazyLock::new(|| {
-        let content = Assets::get("openapi.yaml")?;
-        let yaml_str = std::str::from_utf8(&content.data).ok()?;
+        // Source of truth is the tracked repo-root openapi.yaml, compiled in
+        // directly so the served spec can never drift from the checked-in file.
+        let yaml_str = include_str!("../openapi.yaml");
         let json_value: serde_json::Value = serde_yaml::from_str(yaml_str).ok()?;
         let json_str = serde_json::to_string_pretty(&json_value).ok()?;
         Some(Box::leak(json_str.into_boxed_str()))
@@ -576,7 +562,7 @@ async fn serve_exec(
     let mut command = Command::new(&cfg.shell);
     command.arg("-c");
     command.arg(&payload.cmd);
-    
+
     // Attempt privilege drop to match CLI
     #[cfg(unix)]
     if let Some(uid) = cfg.uid {
@@ -586,64 +572,42 @@ async fn serve_exec(
     if let Some(gid) = cfg.gid {
         command.gid(gid);
     }
-    
+
     // Set cwd
     if !cfg.cwd.is_empty() {
         command.current_dir(&cfg.cwd);
     }
 
-    command.stdout(std::process::Stdio::piped());
-    command.stderr(std::process::Stdio::piped());
+    // Hard timeout so a hung command can't hold the HTTP connection forever.
+    const EXEC_TIMEOUT_SECS: u64 = 300;
 
-    /// Hard timeout so a hung command can't hold the HTTP connection forever.
-    const EXEC_TIMEOUT: Duration = Duration::from_secs(300);
-
-    match command.spawn() {
-        Ok(mut child) => {
-            let stdout_opt = child.stdout.take();
-            let stderr_opt = child.stderr.take();
-
-            let result = tokio::time::timeout(EXEC_TIMEOUT, async {
-                let budget = tools::output_budget(tools::MAX_CMD_OUTPUT_TOTAL);
-                let (stdout, stderr, wait_result) = tokio::join!(
-                    tools::read_capped_text(stdout_opt, Arc::clone(&budget)),
-                    tools::read_capped_text(stderr_opt, budget),
-                    child.wait()
-                );
-                (stdout, stderr, wait_result)
-            })
-            .await;
-
-            match result {
-                Ok((mut stdout, mut stderr, wait_result)) => {
-                    if stdout.truncated {
-                        stdout.text.push_str("\n... (stdout truncated; combined output limit reached)");
-                    }
-                    if stderr.truncated {
-                        stderr.text.push_str("\n... (stderr truncated; combined output limit reached)");
-                    }
-                    let res = ExecResponse {
-                        stdout: stdout.text,
-                        stderr: stderr.text,
-                        status: wait_result.ok().and_then(|s| s.code()),
-                    };
-                    (StatusCode::OK, Json(res)).into_response()
-                }
-                Err(_) => {
-                    let _ = child.kill().await;
-                    let res = ExecResponse {
-                        stdout: String::new(),
-                        stderr: "Command timed out after 300s".to_string(),
-                        status: None,
-                    };
-                    (StatusCode::OK, Json(res)).into_response()
-                }
+    match tools::run_command_captured(command, EXEC_TIMEOUT_SECS).await {
+        Ok(capture) if capture.timed_out => {
+            let res = ExecResponse {
+                stdout: String::new(),
+                stderr: format!("Command timed out after {}s", EXEC_TIMEOUT_SECS),
+                status: None,
+            };
+            (StatusCode::OK, Json(res)).into_response()
+        }
+        Ok(mut capture) => {
+            if capture.stdout.truncated {
+                capture.stdout.text.push_str("\n... (stdout truncated; combined output limit reached)");
             }
+            if capture.stderr.truncated {
+                capture.stderr.text.push_str("\n... (stderr truncated; combined output limit reached)");
+            }
+            let res = ExecResponse {
+                stdout: capture.stdout.text,
+                stderr: capture.stderr.text,
+                status: capture.status.and_then(|s| s.code()),
+            };
+            (StatusCode::OK, Json(res)).into_response()
         }
         Err(e) => {
             let res = ExecResponse {
                 stdout: String::new(),
-                stderr: e.to_string(),
+                stderr: e,
                 status: None,
             };
             (StatusCode::INTERNAL_SERVER_ERROR, Json(res)).into_response()
