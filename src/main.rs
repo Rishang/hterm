@@ -1,4 +1,5 @@
 mod config;
+mod lsp;
 mod mcp;
 mod pty;
 mod rest;
@@ -313,6 +314,7 @@ async fn main() {
         expected_auth,
         custom_index,
         mcp_transmitters: std::sync::RwLock::new(std::collections::HashMap::new()),
+        lsp:            std::sync::Mutex::new(lsp::LspManager::default()),
     });
 
     // ── Router ────────────────────────────────────────────────────────────────
@@ -329,6 +331,7 @@ async fn main() {
         .route(&format!("{}/api/exec",          bp), post(serve_exec))
         .nest(&format!("{}/api/tools",          bp), rest::router())
         .nest(&format!("{}/api/files",          bp), rest::files_router())
+        .nest(&format!("{}/api/lsp",            bp), lsp::router())
 
         // WebSocket (industry standard convention)
         .route(&format!("{}/ws",                bp), get(ws::ws_handler))

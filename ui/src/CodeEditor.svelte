@@ -26,6 +26,9 @@
     sql:    () => import("@codemirror/lang-sql").then(m => m.sql()),
     yaml:   () => import("@codemirror/lang-yaml").then(m => m.yaml()),
     yml:    () => import("@codemirror/lang-yaml").then(m => m.yaml()),
+    helm:   () => import("@codemirror/lang-yaml").then(m => m.yaml()),
+    kubernetes: () => import("@codemirror/lang-yaml").then(m => m.yaml()),
+    k8s:    () => import("@codemirror/lang-yaml").then(m => m.yaml()),
     go:     () => import("@codemirror/lang-go").then(m => m.go()),
     lezer:  () => import("@codemirror/lang-lezer").then(m => m.lezer()),
     grammar:() => import("@codemirror/lang-lezer").then(m => m.lezer()),
@@ -147,9 +150,13 @@
   import FindBar from "./FindBar.svelte";
   import { dockerCompletionSource, isDockerAutocompleteFile } from "./autocomplete/docker.js";
   import { goTemplateCompletionSource, isGoTemplateFile } from "./autocomplete/gotemplate.js";
+  import { lspCompletionSource, lspHoverTooltip, lspLanguageForPath, lspServerForLanguage } from "./autocomplete/lsp.js";
 
-  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, active?: boolean, searchTrigger?: number, savedState?: import("@codemirror/state").EditorState | null, onchange?: (v: string) => void, onsave?: () => void, onsavedstate?: (s: import("@codemirror/state").EditorState) => void }} */
-  let { path, value, readonly = false, lang = "", active = true, searchTrigger = 0, savedState = null, onchange, onsave, onsavedstate } = $props();
+  const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
+
+  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, active?: boolean, searchTrigger?: number, savedState?: import("@codemirror/state").EditorState | null, lspServers?: Record<string, string>, onlsenvironment?: (environment: { kind: string, name: string, path?: string }) => void, onchange?: (v: string) => void, onsave?: () => void, onsavedstate?: (s: import("@codemirror/state").EditorState) => void }} */
+  let { path, value, readonly = false, lang = "", active = true, searchTrigger = 0, savedState = null, lspServers = {}, onlsenvironment, onchange, onsave, onsavedstate } = $props();
+  let disposed = false;
 
   /** @type {HTMLElement} */
   let container;
@@ -234,20 +241,27 @@
     };
   }
 
-  onMount(async () => {
+  onMount(() => {
+    void (async () => {
     const fname = path.split("/").pop()?.toLowerCase() ?? "";
     const SHELL_NAMES = new Set(['.bashrc','.bash_profile','.bash_aliases','.zshrc','.zprofile','.profile','.fishrc','bashrc','zshrc','profile']);
     const isDockerfile = fname === 'dockerfile' || fname.startsWith('dockerfile.');
     const ext = lang || (isDockerfile ? "dockerfile" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? ""));
     const langExt = langMap[ext] ? await langMap[ext]() : [];
+    if (disposed) return;
+    const lspLanguage = lspLanguageForPath(path, ext);
     const customCompletions = [
       isDockerAutocompleteFile(path, ext) ? dockerCompletionSource(path, ext) : null,
       isGoTemplateFile(path, ext) ? goTemplateCompletionSource : null,
+      lspLanguage ? lspCompletionSource(path, lspLanguage, basePath, () => lspServerForLanguage(lspLanguage, lspServers), onlsenvironment) : null,
     ].filter(Boolean);
     const completionData = [
       ...customCompletions.map(source => ({ autocomplete: source })),
       { autocomplete: completeAnyWord },
     ];
+    const lspHover = lspLanguage
+      ? lspHoverTooltip(path, lspLanguage, basePath, () => lspServerForLanguage(lspLanguage, lspServers), onlsenvironment, langExt)
+      : null;
 
     const extensions = [
       oneDark,
@@ -258,6 +272,7 @@
       EditorView.lineWrapping,
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       EditorState.languageData.of(() => completionData),
+      ...(lspHover ? [lspHover] : []),
       ...(readonly
         ? [EditorState.readOnly.of(true)]
         : [
@@ -271,6 +286,7 @@
       ),
       autocompletion({
         activateOnTyping: !readonly,
+        activateOnTypingDelay: 250,
         maxRenderedOptions: 80,
       }),
       search({ top: false, createPanel: createSearchPanel }),
@@ -309,6 +325,7 @@
       state: savedState ?? EditorState.create({ doc: value, extensions }),
       parent: container,
     });
+    })();
   });
 
   $effect(() => {
@@ -323,7 +340,7 @@
     if (active && view) openSearchPanel(view);
   });
 
-  onDestroy(() => { onsavedstate?.(view?.state); view?.destroy(); });
+  onDestroy(() => { disposed = true; onsavedstate?.(view?.state); view?.destroy(); });
 </script>
 
 <div class="cm-wrap" bind:this={container}></div>

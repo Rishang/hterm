@@ -1,30 +1,115 @@
 <script>
+  import { onDestroy } from "svelte";
   import CodeEditor, { supportedLangs } from "./CodeEditor.svelte";
+  import { lspLanguageForPath, lspServerForLanguage } from "./autocomplete/lsp.js";
   import { marked } from "marked";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
-  /** @type {{ tab: import("./App.svelte").FileTab | null | undefined, active?: boolean, searchTrigger?: number, onFocus?: () => void, onOpenSidebar?: () => void }} */
-  let { tab, active = true, searchTrigger = 0, onFocus, onOpenSidebar } = $props();
+  /** @type {{ tab: import("./App.svelte").FileTab | null | undefined, active?: boolean, searchTrigger?: number, lspServers?: Record<string, string>, autosave?: { enabled: boolean, delay: number }, onFocus?: () => void, onOpenSidebar?: () => void }} */
+  let { tab, active = true, searchTrigger = 0, lspServers = {}, autosave = { enabled: true, delay: 1000 }, onFocus, onOpenSidebar } = $props();
+  let lspEnvironment = $state(null);
+  let environmentRequest = 0;
+  let autosaveTimer = null;
+  let saving = false;
+  let saveQueued = false;
 
-  async function saveTab() {
-    if (!tab) return;
-    tab.saveStatus = "saving";
+  function fileLanguage(current) {
+    const fname = current.path.split("/").pop()?.toLowerCase() ?? "";
+    const shellNames = new Set([".bashrc", ".bash_profile", ".bash_aliases", ".zshrc", ".zprofile", ".profile", ".fishrc", "bashrc", "zshrc", "profile"]);
+    if (current.langOverride) return current.langOverride;
+    if (fname === "dockerfile" || fname.startsWith("dockerfile.")) return "dockerfile";
+    if (shellNames.has(fname)) return "sh";
+    return current.path.split(".").pop()?.toLowerCase() ?? "";
+  }
+
+  async function refreshLspEnvironment(current) {
+    const request = ++environmentRequest;
+    const language = lspLanguageForPath(current.path, fileLanguage(current));
+    if (!language || !lspServerForLanguage(language, lspServers)) {
+      lspEnvironment = null;
+      return;
+    }
+    if (language !== "python") {
+      lspEnvironment = { kind: "global", name: "Global" };
+      return;
+    }
     try {
-      await fetch(`${basePath}/api/tools/call`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "write_file", arguments: { path: tab.path, content: tab.editContent } }),
-      });
-      tab.content = tab.editContent;
-      tab.saveStatus = "saved";
-      setTimeout(() => {
-        if (tab?.saveStatus === "saved") tab.saveStatus = "";
-      }, 2000);
+      const response = await fetch(`${basePath}/api/lsp/environment?path=${encodeURIComponent(current.path)}&language=${encodeURIComponent(language)}`);
+      if (response.ok && request === environmentRequest) lspEnvironment = await response.json();
     } catch {
-      tab.saveStatus = "error";
+      if (request === environmentRequest) lspEnvironment = null;
     }
   }
+
+  $effect(() => {
+    const current = tab;
+    if (!current || current.loading || current.isBinary || current.error) {
+      lspEnvironment = null;
+      return;
+    }
+    void refreshLspEnvironment(current);
+  });
+
+  function scheduleAutosave() {
+    if (!autosave.enabled || !tab || tab.editContent === tab.content) return;
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      autosaveTimer = null;
+      void saveTab();
+    }, autosave.delay);
+  }
+
+  function onEditorChange(value) {
+    if (!tab) return;
+    tab.editContent = value;
+    scheduleAutosave();
+  }
+
+  async function saveTab() {
+    clearTimeout(autosaveTimer);
+    autosaveTimer = null;
+    const current = tab;
+    if (!current || current.editContent === current.content) return;
+    if (saving) {
+      saveQueued = true;
+      return;
+    }
+
+    saving = true;
+    const content = current.editContent;
+    current.saveStatus = "saving";
+    try {
+      const response = await fetch(`${basePath}/api/tools/call`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "write_file", arguments: { path: current.path, content } }),
+      });
+      if (!response.ok) throw new Error("save failed");
+      current.content = content;
+      current.saveStatus = "saved";
+      setTimeout(() => {
+        if (current.saveStatus === "saved") current.saveStatus = "";
+      }, 2000);
+    } catch {
+      current.saveStatus = "error";
+    } finally {
+      saving = false;
+      if (saveQueued || (autosave.enabled && current.editContent !== current.content)) {
+        saveQueued = false;
+        scheduleAutosave();
+      }
+    }
+  }
+
+  $effect(() => {
+    if (!autosave.enabled) {
+      clearTimeout(autosaveTimer);
+      autosaveTimer = null;
+    }
+  });
+
+  onDestroy(() => clearTimeout(autosaveTimer));
 </script>
 
 <div id="file-content" role="region" aria-label="File editor" onpointerdown={onFocus}>
@@ -57,9 +142,11 @@
           value={tab.editContent}
           lang={tab.langOverride}
           savedState={tab.editorState}
+          {lspServers}
+          onlsenvironment={(environment) => { lspEnvironment = environment; }}
           {active}
           {searchTrigger}
-          onchange={(v) => { tab.editContent = v; }}
+          onchange={onEditorChange}
           onsavedstate={(s) => { tab.editorState = s; }}
           onsave={saveTab}
         />
@@ -68,6 +155,9 @@
 
     <div class="fm-breadcrumb">
       <span class="fm-bc-part">{tab.path}</span>
+      {#if lspEnvironment}
+        <span class="fm-lsp-environment" title={lspEnvironment.path ?? "System language environment"}>LSP: {lspEnvironment.kind === "venv" ? `venv (${lspEnvironment.name})` : "global"}</span>
+      {/if}
       <div class="fm-bc-tools">
         {#if tab.path.endsWith(".md") || tab.path.endsWith(".html") || tab.path.endsWith(".htm")}
           <button class="fm-preview-btn" class:active={tab.preview} onclick={() => { tab.preview = !tab.preview; }}>

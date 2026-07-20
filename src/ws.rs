@@ -61,6 +61,10 @@ pub struct AppState {
     /// points — only quick insert/remove/lookup operations.  This avoids the
     /// overhead of tokio's async lock machinery.
     pub mcp_transmitters: std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<axum::response::sse::Event>>>,
+
+    /// Persistent language-server sessions used by the file editor. The lock is
+    /// only held for synchronous pool bookkeeping, never across process I/O.
+    pub lsp: std::sync::Mutex<crate::lsp::LspManager>,
 }
 
 /// Commands forwarded from the WebSocket reader task to the PTY owner task.

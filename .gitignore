@@ -175,3 +175,4 @@ vite.config.ts.timestamp-*
 .vite/
 .codegraph/
 .understand-anything/
+.pi-subagents/

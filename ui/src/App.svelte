@@ -4,10 +4,13 @@
   import FilePane from "./FilePane.svelte";
   import TermTab from "./TermTab.svelte";
   import ShortcutInfo from "./ShortcutInfo.svelte";
+  import SettingsWindow from "./SettingsWindow.svelte";
   import CommandPalette from "./CommandPalette.svelte";
   import { fileIcon } from "./fileIcon.js";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
+  const LSP_SETTINGS_KEY = "hterm.lspServers";
+  const EDITOR_SETTINGS_KEY = "hterm.editorSettings";
 
   // ── Terminal tabs ─────────────────────────────────────────────────────────
   let termTabCounter = 1;
@@ -123,6 +126,22 @@
   let splitOrientation = $state("right");
   let splitMenuOpen = $state(false);
   let splitRatio = $state(0.5);
+  /** @type {Record<string, string>} */
+  let lspServers = $state({});
+  let autosave = $state({ enabled: true, delay: 1000 });
+
+  function setLspServer(language, server) {
+    lspServers = { ...lspServers, [language]: server };
+    localStorage.setItem(LSP_SETTINGS_KEY, JSON.stringify(lspServers));
+  }
+
+  function setAutosave(settings) {
+    autosave = {
+      enabled: !!settings.enabled,
+      delay: Math.min(60000, Math.max(250, Number(settings.delay) || 1000)),
+    };
+    localStorage.setItem(EDITOR_SETTINGS_KEY, JSON.stringify(autosave));
+  }
 
   function isTermTab(id) { return termTabs.includes(id); }
   function isFileTab(id) { return !!fileTabById(id); }
@@ -336,6 +355,12 @@
   });
 
   onMount(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LSP_SETTINGS_KEY) ?? "{}");
+      if (saved && typeof saved === "object" && !Array.isArray(saved)) lspServers = saved;
+      const editorSettings = JSON.parse(localStorage.getItem(EDITOR_SETTINGS_KEY) ?? "null");
+      if (editorSettings && typeof editorSettings === "object") setAutosave(editorSettings);
+    } catch { /* ignore malformed local settings */ }
     // Capture before xterm/CodeMirror can consume tab-switch shortcuts.
     window.addEventListener("keydown", onGlobalKeydown, { capture: true });
     return () => window.removeEventListener("keydown", onGlobalKeydown, { capture: true });
@@ -479,6 +504,7 @@
     </div>
 
     <ShortcutInfo bind:open={showShortcutHints} />
+    <SettingsWindow servers={lspServers} onchange={setLspServer} {autosave} onautosavechange={setAutosave} />
 
   </div>
 
@@ -496,7 +522,7 @@
         {@const fileTab = visibleFileTab()}
         {#if splitOrientation === "down"}
           <section class="workspace-pane workspace-pane-file" class:focused={fileTab && activeTab === fileTab.id} style:flex-basis={`${splitRatio * 100}%`} aria-label="File pane" onpointerdown={focusFilePane}>
-            <FilePane tab={fileTab} active={fileTab && activeTab === fileTab.id} searchTrigger={searchTrigger} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+            <FilePane tab={fileTab} active={fileTab && activeTab === fileTab.id} searchTrigger={searchTrigger} {lspServers} {autosave} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
           </section>
           <button class="split-resize-handle" type="button" aria-label="Resize file and terminal panes" onmousedown={onSplitResizeStart}></button>
           <section class="workspace-pane workspace-pane-terminal" class:focused={activeTab === terminalId} aria-label="Terminal pane" onpointerdown={focusTerminalPane}>
@@ -516,11 +542,11 @@
           </section>
           <button class="split-resize-handle" type="button" aria-label="Resize terminal and file panes" onmousedown={onSplitResizeStart}></button>
           <section class="workspace-pane workspace-pane-file" class:focused={fileTab && activeTab === fileTab.id} aria-label="File pane" onpointerdown={focusFilePane}>
-            <FilePane tab={fileTab} active={fileTab && activeTab === fileTab.id} searchTrigger={searchTrigger} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+            <FilePane tab={fileTab} active={fileTab && activeTab === fileTab.id} searchTrigger={searchTrigger} {lspServers} {autosave} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
           </section>
         {/if}
       {:else if isFileTab(activeTab)}
-        <FilePane tab={visibleFileTab()} active={true} searchTrigger={searchTrigger} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+        <FilePane tab={visibleFileTab()} active={true} searchTrigger={searchTrigger} {lspServers} {autosave} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
       {:else}
         {#each termTabs as tid (tid)}
           <div class="term-wrap" class:hidden={tid !== activeTab}>
