@@ -11,6 +11,8 @@
     ["Cmd + Shift + [", "Previous tab"],
     ["Cmd + Shift + ]", "Next tab"],
     ["Cmd + F", "Find in the active tab"],
+    ["Cmd + Shift + F", "Search across all files"],
+    ["Cmd + Shift + H", "Replace across all files"],
     ["Enter / Shift + Enter", "Next or previous find result"],
     ["Esc", "Close the find bar"],
     ["Cmd + S", "Save the active file tab"],
@@ -22,6 +24,8 @@
     ["Ctrl/Alt + PageUp", "Previous tab"],
     ["Ctrl/Alt + PageDown", "Next tab"],
     ["Ctrl + F", "Find in the active tab"],
+    ["Ctrl + Shift + F", "Search across all files"],
+    ["Ctrl + Shift + H", "Replace across all files"],
     ["Enter / Shift + Enter", "Next or previous find result"],
     ["Esc", "Close the find bar"],
     ["Ctrl + S", "Save the active file tab"],
@@ -49,7 +53,7 @@
     <div class="shortcut-popover" role="dialog" aria-label="Terminal shortcuts" tabindex="-1">
       <div class="shortcut-title">Terminal shortcuts</div>
       <div class="shortcut-grid">
-        {#each shortcutHints as [keys, action]}
+        {#each shortcutHints as [keys, action] (keys)}
           <kbd>{keys}</kbd>
           <span>{action}</span>
         {/each}

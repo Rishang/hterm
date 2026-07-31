@@ -249,6 +249,7 @@ pub fn files_router() -> Router<Arc<AppState>> {
         .route("/", get(list_files_handler).post(create_file_handler))
         .route("/read", get(read_file_handler))
         .route("/copy", post(copy_file_handler))
+        .route("/watch", crate::watch::routes())
         .route("/{*path}", patch(rename_file_handler).delete(delete_file_handler))
 }
 

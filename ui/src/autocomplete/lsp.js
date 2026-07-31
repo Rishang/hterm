@@ -61,28 +61,72 @@ const COMPLETION_TYPES = [
   "unit", "value", "enum", "keyword", "snippet", "color", "file", "reference", "folder", "constant", "type",
 ];
 
-export function supportsLsp(language) {
-  return !!lspLanguage(language);
-}
-
 function documentation(item) {
   return typeof item.documentation === "string" ? item.documentation : item.documentation?.value;
 }
 
-function completionOption(item) {
-  const textEdit = item.textEdit?.newText;
+/** Resolve an LSP position against the live document, or null if it has moved out of range. */
+function docOffset(doc, position) {
+  if (!position || position.line + 1 > doc.lines) return null;
+  const line = doc.line(position.line + 1);
+  return Math.min(line.from + (position.character ?? 0), line.to);
+}
+
+/**
+ * A server's edit range can start before CodeMirror's `[\w$]*` word boundary —
+ * clangd's `#include <…>`, YAML key paths, anything spanning `.` or `-`.
+ * Applying `newText` at the word boundary would duplicate that prefix, so
+ * replace the range the server actually asked for.
+ */
+function applyTextEdit(newText, range) {
+  return (view, completion, from, to) => {
+    const doc = view.state.doc;
+    const start = docOffset(doc, range.start);
+    const end = docOffset(doc, range.end);
+    const validRange = start !== null && end !== null && start <= end;
+    const editFrom = validRange ? start : from;
+    const editTo = validRange ? end : to;
+    view.dispatch({
+      changes: { from: editFrom, to: editTo, insert: newText },
+      selection: { anchor: editFrom + newText.length },
+      userEvent: "input.complete",
+    });
+  };
+}
+
+/** `index` is the server's own ranking; boost keeps it ahead of local word completions. */
+function completionOption(item, index) {
+  const edit = item.textEdit;
+  const range = edit?.range ?? edit?.insert ?? edit?.replace;
   return {
     label: String(item.label ?? ""),
     detail: item.detail ?? item.labelDetails?.detail,
     info: documentation(item),
     type: COMPLETION_TYPES[item.kind - 1] ?? "text",
-    boost: 100,
-    apply: textEdit ?? item.insertText ?? item.label,
+    boost: Math.max(1, 99 - index),
+    apply: edit?.newText && range
+      ? applyTextEdit(edit.newText, range)
+      : edit?.newText ?? item.insertText ?? item.label,
   };
 }
 
+const SORT_KEY = (item) => item.sortText ?? item.label ?? "";
+
+/**
+ * Honour `sortText` when the server supplies it. Sorting by label instead would
+ * throw away the relevance order servers express through response order alone.
+ */
+function rankedItems(items) {
+  if (!items.some((item) => item.sortText)) return items;
+  return [...items].sort((a, b) => (SORT_KEY(a) < SORT_KEY(b) ? -1 : SORT_KEY(a) > SORT_KEY(b) ? 1 : 0));
+}
+
+// A signature/documentation divider must own its line; `---` inside prose or a
+// code sample is not a section break.
+const DOC_DIVIDER = /^-{3,}[ \t]*$/m;
+
 function codeAndDocumentation(value) {
-  const divider = /-{3,}\s*/.exec(value);
+  const divider = DOC_DIVIDER.exec(value);
   if (!divider) return [{ code: value }];
   const code = value.slice(0, divider.index).trim();
   const documentation = value.slice(divider.index + divider[0].length).trim();
@@ -100,7 +144,7 @@ function hoverParts(result) {
     if (entry?.language && entry.value) return codeAndDocumentation(entry.value);
     const value = typeof entry === "string" ? entry : entry?.value;
     if (!value) return [];
-    if (isSignature(value) || /-{3,}\s*/.test(value)) return codeAndDocumentation(value);
+    if (isSignature(value) || DOC_DIVIDER.test(value)) return codeAndDocumentation(value);
     const parts = [];
     let end = 0;
     for (const match of value.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
@@ -121,9 +165,9 @@ const HOVER_CODE_TOKENS = [
   [/\b(?:[A-Z][A-Za-z0-9_]*|str|int|float|bool|bytes|dict|list|set|tuple|object|Any|Sequence|Mapping|Iterable|Callable)\b/g, "lsp-hover-type", 1],
 ];
 
-function signatureDecorations(doc) {
+/** Collect non-overlapping highlight spans, highest-priority pattern winning. */
+function highlightSpans(text) {
   const tokens = [];
-  const text = doc.toString();
   for (const [pattern, className, priority] of HOVER_CODE_TOKENS) {
     for (const match of text.matchAll(pattern)) {
       tokens.push({ from: match.index, to: match.index + match[0].length, className, priority });
@@ -131,12 +175,20 @@ function signatureDecorations(doc) {
   }
   tokens.sort((a, b) => a.from - b.from || b.priority - a.priority || b.to - a.to);
 
-  const builder = new RangeSetBuilder();
+  const spans = [];
   let end = 0;
   for (const token of tokens) {
     if (token.from < end) continue;
-    builder.add(token.from, token.to, Decoration.mark({ class: token.className }));
+    spans.push(token);
     end = token.to;
+  }
+  return spans;
+}
+
+function signatureDecorations(doc) {
+  const builder = new RangeSetBuilder();
+  for (const { from, to, className } of highlightSpans(doc.toString())) {
+    builder.add(from, to, Decoration.mark({ class: className }));
   }
   return builder.finish();
 }
@@ -188,24 +240,21 @@ function markdownDom(markdown) {
         element.removeAttribute(attribute.name);
       }
     }
+    // Set after the attribute sweep so it cannot be stripped by it: documentation
+    // links must not navigate the terminal away from itself.
+    if (element.tagName === "A" && element.hasAttribute("href")) {
+      element.target = "_blank";
+      element.rel = "noreferrer noopener";
+    }
   }
   return template.content;
 }
 
 function highlightCode(code) {
-  const tokens = [];
   const text = code.textContent;
-  for (const [pattern, className, priority] of HOVER_CODE_TOKENS) {
-    for (const match of text.matchAll(pattern)) {
-      tokens.push({ from: match.index, to: match.index + match[0].length, className, priority });
-    }
-  }
-  tokens.sort((a, b) => a.from - b.from || b.priority - a.priority || b.to - a.to);
-
   const fragment = document.createDocumentFragment();
   let end = 0;
-  for (const token of tokens) {
-    if (token.from < end) continue;
+  for (const token of highlightSpans(text)) {
     fragment.append(text.slice(end, token.from));
     const span = document.createElement("span");
     span.className = token.className;
@@ -287,33 +336,44 @@ function hoverDom(parts, languageExtension) {
   return { dom, destroy: () => editors.forEach((editor) => editor.destroy()) };
 }
 
+const MAX_COMPLETION_ITEMS = 200;
+
+/** POST one document-and-position request to the bridge; null on any failure. */
+async function askBridge(endpoint, basePath, body, signal) {
+  const response = await fetch(`${basePath}/api/lsp/${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+    body: JSON.stringify(body),
+  });
+  return response.ok ? await response.json() : null;
+}
+
+function requestBody(path, language, server, state, pos) {
+  const line = state.doc.lineAt(pos);
+  return {
+    path,
+    language,
+    server,
+    content: state.doc.toString(),
+    position: { line: line.number - 1, character: pos - line.from },
+  };
+}
+
 /** Return a CodeMirror tooltip extension backed by LSP hover information. */
 export function lspHoverTooltip(path, language, basePath, server, onEnvironment, languageExtension = []) {
+  const currentServer = () => (typeof server === "function" ? server() : server);
   let controller;
   return hoverTooltip(async (view, pos) => {
-    const selectedServer = typeof server === "function" ? server() : server;
-    if (!selectedServer) return null;
+    const selected = currentServer();
+    if (!selected) return null;
     controller?.abort();
-    const request = controller = new AbortController();
-    const line = view.state.doc.lineAt(pos);
+    const request = (controller = new AbortController());
     try {
-      const response = await fetch(`${basePath}/api/lsp/hover`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: request.signal,
-        body: JSON.stringify({
-          path,
-          language,
-          server: selectedServer,
-          content: view.state.doc.toString(),
-          position: { line: line.number - 1, character: pos - line.from },
-        }),
-      });
-      if (!response.ok || request.signal.aborted || (typeof server === "function" && server() !== selectedServer)) return null;
-      const result = await response.json();
-      if (request.signal.aborted || (typeof server === "function" && server() !== selectedServer)) return null;
-      if (result?.environment) onEnvironment?.(result.environment);
-      const parts = hoverParts(result?.result);
+      const result = await askBridge("hover", basePath, requestBody(path, language, selected, view.state, pos), request.signal);
+      if (!result || request.signal.aborted || currentServer() !== selected) return null;
+      if (result.environment) onEnvironment?.(result.environment);
+      const parts = hoverParts(result.result);
       if (!parts.length) return null;
       return { pos, above: false, create: () => hoverDom(parts, languageExtension) };
     } catch {
@@ -324,40 +384,31 @@ export function lspHoverTooltip(path, language, basePath, server, onEnvironment,
 
 /** Return a CodeMirror completion source backed by the server's LSP bridge. */
 export function lspCompletionSource(path, language, basePath, server, onEnvironment) {
+  const currentServer = () => (typeof server === "function" ? server() : server);
   let controller;
   return async (context) => {
-    const selectedServer = typeof server === "function" ? server() : server;
-    if (!selectedServer) return null;
+    const selected = currentServer();
+    if (!selected) return null;
     const word = context.matchBefore(/[\w$]*/);
     if (!context.explicit && (!word || word.from === word.to)) return null;
 
     controller?.abort();
-    const request = controller = new AbortController();
+    const request = (controller = new AbortController());
     context.addEventListener("abort", () => request.abort(), { onDocChange: true });
-    const line = context.state.doc.lineAt(context.pos);
     try {
-      const response = await fetch(`${basePath}/api/lsp/completion`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: request.signal,
-        body: JSON.stringify({
-          path,
-          language,
-          server: selectedServer,
-          content: context.state.doc.toString(),
-          position: { line: line.number - 1, character: context.pos - line.from },
-        }),
-      });
-      if (!response.ok || context.aborted || request.signal.aborted || (typeof server === "function" && server() !== selectedServer)) return null;
-      const result = await response.json();
-      if (context.aborted || request.signal.aborted || (typeof server === "function" && server() !== selectedServer)) return null;
-      if (result?.environment) onEnvironment?.(result.environment);
-      const items = Array.isArray(result) ? result : result?.items;
+      const result = await askBridge("completion", basePath, requestBody(path, language, selected, context.state, context.pos), request.signal);
+      if (!result || context.aborted || request.signal.aborted || currentServer() !== selected) return null;
+      if (result.environment) onEnvironment?.(result.environment);
+      const items = Array.isArray(result) ? result : result.items;
       if (!Array.isArray(items)) return null;
       return {
         from: word?.from ?? context.pos,
-        options: items.filter(item => item?.label).slice(0, 200).map(completionOption),
-        validFor: /[\w$]*/,
+        options: rankedItems(items.filter((item) => item?.label))
+          .slice(0, MAX_COMPLETION_ITEMS)
+          .map(completionOption),
+        // A truncated list must be re-queried as the user types; filtering it
+        // locally would keep narrowing a slice that never held the right item.
+        validFor: result.isIncomplete ? undefined : /[\w$]*/,
       };
     } catch {
       return null;

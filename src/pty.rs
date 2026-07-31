@@ -217,6 +217,18 @@ impl PtySession {
         Ok(written)
     }
 
+    /// The shell's current working directory, or `None` if it cannot be read.
+    ///
+    /// Resolved from `/proc/<pid>/cwd`, which the kernel updates on every `cd`.
+    /// Reading the shell's own cwd rather than parsing OSC 7 means the explorer's
+    /// auto-cd works with any shell and needs no `PROMPT_COMMAND`/shell
+    /// integration. This is a procfs symlink lookup, not disk I/O, so it is
+    /// cheap enough to call from the async PTY task.
+    pub fn cwd(&self) -> Option<String> {
+        let path = std::fs::read_link(format!("/proc/{}/cwd", self.child_pid)).ok()?;
+        path.to_str().map(str::to_owned)
+    }
+
     /// Resize the PTY window (columns × rows).
     ///
     /// The kernel sends `SIGWINCH` to the shell's foreground process group

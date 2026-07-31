@@ -15,7 +15,8 @@ serde_json  = "1"
 serde_yaml  = "0.9"
 clap        = { version = "4",    features = ["derive"] }
 # "user" adds nix::unistd::{setuid, setgid, Uid, Gid} for privilege drop.
-nix         = { version = "0.29", features = ["term", "process", "signal", "user"] }
+# "inotify" backs the file-explorer change watcher — kernel-driven, so no polling.
+nix         = { version = "0.29", features = ["term", "process", "signal", "user", "inotify"] }
 tracing     = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures     = "0.3"

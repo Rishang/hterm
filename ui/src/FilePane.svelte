@@ -1,13 +1,14 @@
 <script>
   import { onDestroy } from "svelte";
   import CodeEditor, { supportedLangs } from "./CodeEditor.svelte";
+  import { callTool } from "./toolsApi.js";
   import { lspLanguageForPath, lspServerForLanguage } from "./autocomplete/lsp.js";
   import { marked } from "marked";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
-  /** @type {{ tab: import("./App.svelte").FileTab | null | undefined, active?: boolean, searchTrigger?: number, lspServers?: Record<string, string>, autosave?: { enabled: boolean, delay: number }, onFocus?: () => void, onOpenSidebar?: () => void }} */
-  let { tab, active = true, searchTrigger = 0, lspServers = {}, autosave = { enabled: true, delay: 1000 }, onFocus, onOpenSidebar } = $props();
+  /** @type {{ tab: import("./App.svelte").FileTab | null | undefined, active?: boolean, reveal?: { path: string, line: number, column: number, length: number, focus: boolean, nonce: number } | null, lspServers?: Record<string, string>, autosave?: { enabled: boolean, delay: number }, onFocus?: () => void, onOpenSidebar?: () => void }} */
+  let { tab, active = true, reveal = null, lspServers = {}, autosave = { enabled: true, delay: 1000 }, onFocus, onOpenSidebar } = $props();
   let lspEnvironment = $state(null);
   let environmentRequest = 0;
   let autosaveTimer = null;
@@ -80,12 +81,7 @@
     const content = current.editContent;
     current.saveStatus = "saving";
     try {
-      const response = await fetch(`${basePath}/api/tools/call`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "write_file", arguments: { path: current.path, content } }),
-      });
-      if (!response.ok) throw new Error("save failed");
+      await callTool(basePath, "write_file", { path: current.path, content });
       current.content = content;
       current.saveStatus = "saved";
       setTimeout(() => {
@@ -145,7 +141,8 @@
           {lspServers}
           onlsenvironment={(environment) => { lspEnvironment = environment; }}
           {active}
-          {searchTrigger}
+          {reveal}
+          externalEdit={tab.externalEdit ?? 0}
           onchange={onEditorChange}
           onsavedstate={(s) => { tab.editorState = s; }}
           onsave={saveTab}

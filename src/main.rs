@@ -4,6 +4,7 @@ mod mcp;
 mod pty;
 mod rest;
 mod tools;
+mod watch;
 mod ws;
 
 use axum::http::{HeaderMap, StatusCode};
@@ -314,6 +315,7 @@ async fn main() {
         expected_auth,
         custom_index,
         mcp_transmitters: std::sync::RwLock::new(std::collections::HashMap::new()),
+        watch_sessions: std::sync::RwLock::new(std::collections::HashMap::new()),
         lsp:            std::sync::Mutex::new(lsp::LspManager::default()),
     });
 

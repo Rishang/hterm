@@ -1,8 +1,8 @@
 <script>
   import LspSettings from "./LspSettings.svelte";
 
-  /** @type {{ servers?: Record<string, string>, onchange?: (language: string, server: string) => void, autosave?: { enabled: boolean, delay: number }, onautosavechange?: (settings: { enabled: boolean, delay: number }) => void }} */
-  let { servers = {}, onchange, autosave = { enabled: true, delay: 1000 }, onautosavechange } = $props();
+  /** @type {{ servers?: Record<string, string>, onchange?: (language: string, server: string) => void, autosave?: { enabled: boolean, delay: number }, onautosavechange?: (settings: { enabled: boolean, delay: number }) => void, explorer?: { autoCd: boolean }, onexplorerchange?: (settings: { autoCd: boolean }) => void }} */
+  let { servers = {}, onchange, autosave = { enabled: true, delay: 1000 }, onautosavechange, explorer = { autoCd: true }, onexplorerchange } = $props();
   let open = $state(false);
   let section = $state("lsp");
 
@@ -42,6 +42,7 @@
         <nav class="settings-nav" aria-label="Settings sections">
           <button type="button" class:active={section === "lsp"} onclick={() => { section = "lsp"; }}>Language Servers</button>
           <button type="button" class:active={section === "autosave"} onclick={() => { section = "autosave"; }}>Autosave</button>
+          <button type="button" class:active={section === "explorer"} onclick={() => { section = "explorer"; }}>File Explorer</button>
         </nav>
         <main class="settings-content">
           {#if section === "lsp"}
@@ -59,6 +60,14 @@
               <input type="number" min="250" max="60000" step="250" value={autosave.delay} disabled={!autosave.enabled} onchange={(event) => onautosavechange?.({ ...autosave, delay: event.currentTarget.value })} />
               <span>ms</span>
             </label>
+          {:else if section === "explorer"}
+            <h3>File Explorer</h3>
+            <p class="settings-description">The explorer reflects changes made outside the browser, such as commands run in a terminal session, without needing a refresh.</p>
+            <label class="settings-check">
+              <input type="checkbox" checked={explorer.autoCd} onchange={(event) => onexplorerchange?.({ ...explorer, autoCd: event.currentTarget.checked })} />
+              <span>Follow the active terminal's directory</span>
+            </label>
+            <p class="settings-description">When enabled, the tree points at the working directory of whichever terminal tab is on screen and follows it as you <code>cd</code>. Switching terminal tabs re-points the tree. Your manually pinned path is remembered and restored when this is turned off.</p>
           {/if}
         </main>
       </div>
