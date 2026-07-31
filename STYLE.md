@@ -20,12 +20,13 @@
 
 Backend responsibilities are explicit: `config` models configuration, `pty` owns Unix PTYs, `ws` owns the terminal transport and `AppState`, `tools` owns reusable tools/authentication, `rest` owns HTTP tool/files routes, `watch` owns inotify-backed filesystem change notification for the explorer, `mcp` owns JSON-RPC-over-SSE, and `lsp` owns language-server pooling/bridge routes. REST and MCP share `tools::call_tool`; REST, MCP, and LSP share `tools::check_auth`. Extend shared behavior centrally instead of duplicating it per transport.
 
-The UI is component-first. `App.svelte` owns tabs, layout, persisted settings, global shortcuts, and file opening. Focused components own their interaction; reusable non-component logic is a named-export JavaScript module. Browser and backend LSP language/server mappings must remain paired (`ui/src/autocomplete/lsp.js`, `src/lsp.rs`).
+The UI is component-first. `App.svelte` owns tabs, layout, persisted settings, global shortcuts, and file opening. Focused components own their interaction; reusable non-component logic is a named-export JavaScript module. `GlobalSearch.svelte` owns search/replace state and presentation while `globalSearch.js` owns command construction, parsing, limits, and text replacement. Browser and backend LSP language/server mappings must remain paired (`ui/src/autocomplete/lsp.js`, `src/lsp.rs`).
 
 ### Shared conventions
 
-- Constrain external work: commands, files, LSP messages/sessions, channels, and terminal buffering use limits, timeouts, or bounded queues.
-- Make resource ownership and cleanup explicit: PTYs, SSE sessions, editor views, observers, timers, sockets, and event listeners are disposed by their owners.
+- Constrain external work: commands, files, LSP messages/sessions, channels, search results, and terminal buffering use limits, timeouts, or bounded queues. Search limits apply to both source lines and expanded occurrences; truncation must remain visible to callers.
+- Make resource ownership and cleanup explicit: PTYs, SSE sessions, editor views, observers, timers, sockets, and event listeners are disposed by their owners. The file explorer closes its filesystem-watch SSE session when hidden and reconnects when shown.
+- Keep filesystem watches demand-driven: watch only visible expanded directories, use bounded per-session and process-wide caps, and handle inotify descriptor removal/aliasing without dropping remaining paths.
 - Preserve security boundaries: read-only is default; authenticate before privileged work; check `writable` before mutation; normalize filesystem mutation paths; keep browser config separate from server secrets.
 - Use maps/tables for extensible sets: tool definitions, language/server mappings, language loaders, file icons, and completion options.
 - Comments explain ownership, protocol rules, security/performance rationale, or non-obvious behavior. Long Rust/CSS files use concise section headings.
@@ -95,9 +96,9 @@ Derive a deployment-aware request base path for browser API/WebSocket calls:
 const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 ```
 
-Check `response.ok` for user-visible work and store loading/error/save state with the owning component. Protect asynchronous UI work: de-duplicate loads, queue autosaves, and use `AbortController` plus staleness checks for LSP. Use `onMount`/`onDestroy` to clean up third-party instances, timers, animation frames, observers, listeners, and WebSockets. Catch expected best-effort operations locally.
+Check `response.ok` for user-visible work and store loading/error/save state with the owning component. Protect asynchronous UI work: de-duplicate loads, queue autosaves, use `AbortController` plus staleness checks for LSP, and invalidate terminal-search results when output changes. Use `onMount`/`onDestroy` to clean up third-party instances, timers, animation frames, observers, listeners, and WebSockets. Catch expected best-effort operations locally.
 
-Extend CodeMirror language loading in `CodeEditor.svelte`; add local completion via predicate/source modules in `autocomplete/`; keep browser LSP adaptation in `autocomplete/lsp.js`. `TermTab.svelte` owns Ghostty Web lifecycle, terminal WebSocket behavior, resize, input handling, and cleanup.
+Extend CodeMirror language loading in `CodeEditor.svelte` through shared loader helpers and alias tables; preserve every supported extension when consolidating aliases. Add local completion via predicate/source modules in `autocomplete/`; keep browser LSP adaptation in `autocomplete/lsp.js`. `TermTab.svelte` owns Ghostty Web lifecycle, terminal WebSocket behavior, resize, input handling, terminal search, and cleanup. Terminal search coordinates must be converted from displayed text to buffer-cell columns so wide, combining, and emoji cells select correctly; synthetic selection events must never reach mouse-tracking applications.
 
 ## CSS
 
