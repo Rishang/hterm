@@ -144,7 +144,12 @@
           {reveal}
           externalEdit={tab.externalEdit ?? 0}
           onchange={onEditorChange}
-          onsavedstate={(s) => { tab.editorState = s; }}
+          onsavedstate={(state, path, language) => {
+            // A keyed editor is destroyed after its tab or language changes.
+            // Do not restore its path- and language-specific state into the
+            // replacement editor; it must build fresh language handlers.
+            if (tab.path === path && tab.langOverride === language) tab.editorState = state ?? null;
+          }}
           onsave={saveTab}
         />
       {/key}
