@@ -678,7 +678,7 @@
     {/if}
 
     <!-- Indent guide lines -->
-    {#each { length: depth } as i (i)}
+    {#each Array.from({ length: depth }, (_, i) => i) as i (i)}
       <span class="fm-indent-guide" style:left="{i * 16 + 12}px"></span>
     {/each}
 
