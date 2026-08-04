@@ -11,15 +11,17 @@
   --bg-surface-stronger: #1e2228;
   --bg-context-hover: #2c313a;
   --bg-danger-muted: #3a2020;
-  --text-primary: #abb2bf;
-  --text-strong: #d7deebde;
-  --text-bright: #e6e6e6;
+  --text-primary: #b1b9c5;
+  --text-strong: #dce3ed;
+  --text-bright: #e9ebef;
   --text-inverse: #ffffff;
-  --text-subtle: #5c6370;
-  --text-muted: #6b737d;
-  --text-hidden: #6f7784;
-  --text-hidden-active: #9aa3ad;
-  --text-hidden-hover: #8c96a3;
+  --text-subtle: #687280;
+  /* Slightly brighter than secondary copy for persistent app chrome. */
+  --text-chrome: #707b8a;
+  --text-muted: #77818e;
+  --text-hidden: #76808e;
+  --text-hidden-active: #a0aab5;
+  --text-hidden-hover: #929daa;
   --accent: #61afef;
   --accent-link: #58a6ff;
   --accent-blue: #61afef;
@@ -222,7 +224,7 @@ html, body {
 }
 .fm-sidebar-title {
   font-size: 11px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-subtle);
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-chrome);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   cursor: pointer; flex: 1;
 }
@@ -234,7 +236,7 @@ html, body {
   border: 1px solid var(--accent) !important; border-radius: 3px; outline: none;
 }
 .fm-icon-btn {
-  background: none; color: var(--text-subtle);
+  background: none; color: var(--text-chrome);
   cursor: pointer; padding: 0 2px; line-height: 1; border-radius: 3px;
   flex-shrink: 0; margin-left: 2px;
 }
@@ -329,7 +331,7 @@ html, body {
 .tab-info-btn {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 100%; flex-shrink: 0;
-  background: none; color: var(--text-subtle);
+  background: none; color: var(--text-chrome);
   font-size: 16px; cursor: pointer;
   border-right: 1px solid var(--border-strong) !important;
   transition: color 0.12s;
@@ -377,7 +379,7 @@ html, body {
   justify-content: center;
   height: 20px;
   background: var(--transparent);
-  color: var(--text-subtle);
+  color: var(--text-chrome);
   cursor: pointer;
 }
 .split-action-btn {
@@ -538,7 +540,7 @@ html, body {
 .tab-new-btn {
   display: flex; align-items: center; justify-content: center;
   width: 28px; height: 100%; flex-shrink: 0;
-  background: none; color: var(--text-subtle);
+  background: none; color: var(--text-chrome);
   font-size: 20px; cursor: pointer;
   transition: color 0.12s;
 }
@@ -651,9 +653,9 @@ html, body {
   display: flex; align-items: center; gap: 4px;
   padding: 2px 12px; flex-shrink: 0;
   background: var(--bg-surface); border-top: 1px solid var(--border);
-  font-size: 12px; color: var(--text-subtle); overflow: hidden;
+  font-size: 12px; color: var(--text-chrome); overflow: hidden;
 }
-.fm-bc-part { color: var(--text-subtle); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-bc-part { color: var(--text-chrome); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-lsp-environment {
   max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 1px 5px; border: 1px solid var(--accent-dim-border); border-radius: 3px;
@@ -662,7 +664,7 @@ html, body {
 .fm-bc-tools { display: flex; align-items: center; gap: 6px; }
 .fm-lang-select {
   padding: 1px 4px;
-  background: var(--bg-surface); color: var(--text-subtle);
+  background: var(--bg-surface); color: var(--text-chrome);
   border: 1px solid var(--border); border-radius: 3px;
   font-size: 13px; cursor: pointer; outline: none;
   scrollbar-color: var(--border) var(--transparent); scrollbar-width: thin;
@@ -673,7 +675,7 @@ html, body {
 .fm-lang-select:hover { border-color: var(--text-subtle); }
 .fm-preview-btn {
   padding: 2px 8px;
-  background: var(--bg-surface); color: var(--text-subtle);
+  background: var(--bg-surface); color: var(--text-chrome);
   border: 1px solid var(--border); border-radius: 3px;
   font-size: 12px; cursor: pointer; outline: none;
 }
