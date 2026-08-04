@@ -47,7 +47,8 @@
     "@replit/codemirror-minimap": "^0.5.2",
     "codemirror-lang-terraform": "0.1.1",
     "ghostty-web": "0.4.0",
-    "marked": "^18.0.3"
+    "marked": "^18.0.3",
+    "mermaid": "^11.16.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

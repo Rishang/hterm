@@ -14,6 +14,33 @@
   let autosaveTimer = null;
   let saving = false;
   let saveQueued = false;
+  let mdPreviewEl = $state(null);
+  let mermaidSeq = 0;
+
+  // ponytail: render mermaid blocks in place after marked() paints; no markdown-it plugin pipeline
+  $effect(() => {
+    const source = tab?.preview ? tab.editContent : null;
+    if (!mdPreviewEl || source == null) return;
+    const blocks = [...mdPreviewEl.querySelectorAll("pre > code.language-mermaid")];
+    if (!blocks.length) return;
+    let cancelled = false;
+    import("mermaid").then(async ({ default: mermaid }) => {
+      mermaid.initialize({ startOnLoad: false, theme: "dark", suppressErrorRendering: true });
+      for (const block of blocks) {
+        try {
+          const { svg } = await mermaid.render(`mermaid-${++mermaidSeq}`, block.textContent);
+          if (cancelled) return;
+          const host = document.createElement("div");
+          host.className = "fm-mermaid";
+          host.innerHTML = svg;
+          block.parentElement.replaceWith(host);
+        } catch {
+          // leave the code block as-is when the diagram doesn't parse
+        }
+      }
+    });
+    return () => { cancelled = true; };
+  });
 
   function fileLanguage(current) {
     const fname = current.path.split("/").pop()?.toLowerCase() ?? "";
@@ -129,7 +156,7 @@
         <iframe class="fm-html-preview" title="HTML Preview" sandbox="" srcdoc={tab.editContent}></iframe>
       {:else}
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-        <div class="fm-md-preview">{@html marked(tab.editContent)}</div>
+        <div class="fm-md-preview" bind:this={mdPreviewEl}>{@html marked(tab.editContent)}</div>
       {/if}
     {:else}
       {#key tab.id + tab.langOverride}
