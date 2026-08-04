@@ -15,7 +15,7 @@ Read and follow [STYLE.md](STYLE.md) before changing code. It is the single sour
 
 ## Execution and validation
 
-Use the narrowest relevant check after a change:
+Use the narrowest relevant check after a change. Always use the repository `Taskfile.yml` through `task` targets for builds; do not invoke `pnpm build` or `cargo build` directly.
 
 - Frontend: `task ui` (build) and `cd ui && pnpm run lint` (lint).
 - Rust: `cargo test` for the crate’s inline tests; use `cargo fmt --check` when the local toolchain provides it.
