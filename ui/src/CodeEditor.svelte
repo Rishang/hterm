@@ -125,6 +125,10 @@
 
   /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, active?: boolean, reveal?: { path: string, line: number, column: number, length: number, focus: boolean, nonce: number } | null, externalEdit?: number, savedState?: import("@codemirror/state").EditorState | null, lspServers?: Record<string, string>, onlsenvironment?: (environment: { kind: string, name: string, path?: string }) => void, onchange?: (v: string) => void, onsave?: () => void, onsavedstate?: (s: import("@codemirror/state").EditorState | undefined, path: string, language: string) => void }} */
   let { path, value, readonly = false, lang = "", active = true, reveal = null, externalEdit = 0, savedState = null, lspServers = {}, onlsenvironment, onchange, onsave, onsavedstate } = $props();
+  // Pinned at init: props can update before Svelte destroys a keyed component,
+  // so the identity that built this editor is captured while it is still ours.
+  const editorPath = path;
+  const editorLanguage = lang;
   let disposed = false;
 
   /** @type {HTMLElement} */
@@ -368,10 +372,13 @@
     view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
   });
 
-  // Identify cached state by path and language. A keyed file/language switch
-  // destroys this component after its replacement is selected; its old state
-  // must not be restored into that replacement.
-  onDestroy(() => { disposed = true; onsavedstate?.(view?.state, path, lang); view?.destroy(); });
+  // Report the identity pinned at init: `path` and `lang` may already hold the
+  // keyed replacement's values by the time this runs.
+  onDestroy(() => {
+    disposed = true;
+    if (view) onsavedstate?.(view.state, editorPath, editorLanguage);
+    view?.destroy();
+  });
 </script>
 
 <div class="cm-wrap" bind:this={container}></div>

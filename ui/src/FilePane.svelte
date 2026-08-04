@@ -7,8 +7,8 @@
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
-  /** @type {{ tab: import("./App.svelte").FileTab | null | undefined, active?: boolean, reveal?: { path: string, line: number, column: number, length: number, focus: boolean, nonce: number } | null, lspServers?: Record<string, string>, autosave?: { enabled: boolean, delay: number }, onFocus?: () => void, onOpenSidebar?: () => void }} */
-  let { tab, active = true, reveal = null, lspServers = {}, autosave = { enabled: true, delay: 1000 }, onFocus, onOpenSidebar } = $props();
+  /** @type {{ tab: import("./App.svelte").FileTab | null | undefined, active?: boolean, reveal?: { path: string, line: number, column: number, length: number, focus: boolean, nonce: number } | null, lspServers?: Record<string, string>, autosave?: { enabled: boolean, delay: number }, editorStateFor?: (path: string, language: string) => import("@codemirror/state").EditorState | null, onEditorState?: (state: import("@codemirror/state").EditorState | undefined, path: string, language: string) => void, onFocus?: () => void, onOpenSidebar?: () => void }} */
+  let { tab, active = true, reveal = null, lspServers = {}, autosave = { enabled: true, delay: 1000 }, editorStateFor = () => null, onEditorState = () => {}, onFocus, onOpenSidebar } = $props();
   let lspEnvironment = $state(null);
   let environmentRequest = 0;
   let autosaveTimer = null;
@@ -164,19 +164,14 @@
           path={tab.path}
           value={tab.editContent}
           lang={tab.langOverride}
-          savedState={tab.editorState}
+          savedState={editorStateFor(tab.path, tab.langOverride)}
           {lspServers}
           onlsenvironment={(environment) => { lspEnvironment = environment; }}
           {active}
           {reveal}
           externalEdit={tab.externalEdit ?? 0}
           onchange={onEditorChange}
-          onsavedstate={(state, path, language) => {
-            // A keyed editor is destroyed after its tab or language changes.
-            // Do not restore its path- and language-specific state into the
-            // replacement editor; it must build fresh language handlers.
-            if (tab.path === path && tab.langOverride === language) tab.editorState = state ?? null;
-          }}
+          onsavedstate={onEditorState}
           onsave={saveTab}
         />
       {/key}
@@ -193,7 +188,7 @@
             {tab.preview ? "Edit" : "Preview"}
           </button>
         {/if}
-        <select id="lang-select" class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.editorState = null; tab.langOverride = e.target.value; }}>
+        <select id="lang-select" class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.langOverride = e.target.value; }}>
           <option value="">Auto</option>
           {#each supportedLangs as l (l)}
             <option value={l}>{l}</option>

@@ -14,6 +14,35 @@
   const EDITOR_SETTINGS_KEY = "hterm.editorSettings";
   const EXPLORER_SETTINGS_KEY = "hterm.explorerSettings";
   const GLOBAL_SEARCH_TAB_ID = "__hterm_global_search__";
+  // Editor state (cursor, scroll, undo history) outlives the keyed CodeEditor
+  // that produced it. Keyed by path and language because a language switch
+  // rebuilds the extensions and must not reuse the old language's state. Read
+  // only when an editor mounts, so a plain Map is enough — reactivity here would
+  // only invalidate the pane on every save without changing what is rendered.
+  /** @type {Map<string, import("@codemirror/state").EditorState>} */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const editorStates = new Map();
+
+  function editorStateKey(path, language) {
+    return `${path}\0${language}`;
+  }
+
+  function editorStateFor(path, language) {
+    return editorStates.get(editorStateKey(path, language)) ?? null;
+  }
+
+  // Closing a tab destroys its editor, and that destroy runs after the tab is
+  // gone, so dropping the entry is not enough on its own — ignore saves for
+  // paths that are no longer open. Together these bound the cache to open tabs.
+  function saveEditorState(state, path, language) {
+    if (state && fileTabById(path)) editorStates.set(editorStateKey(path, language), state);
+  }
+
+  function forgetEditorState(path) {
+    for (const key of editorStates.keys()) {
+      if (key.startsWith(`${path}\0`)) editorStates.delete(key);
+    }
+  }
 
   // ── Terminal tabs ─────────────────────────────────────────────────────────
   let termTabCounter = 1;
@@ -50,7 +79,7 @@
 
   // ── File tabs ─────────────────────────────────────────────────────────────
   /**
-   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string, loading?: boolean, skipRefreshOnActivate?: boolean, editorState?: import("@codemirror/state").EditorState | null }} FileTab
+   * @typedef {{ id: string, path: string, name: string, content: string, editContent: string, mode: 'view'|'edit', isBinary: boolean, error: string, saveStatus: string, loading?: boolean, skipRefreshOnActivate?: boolean }} FileTab
    */
   /** @type {FileTab[]} */
   let fileTabs = $state([]);
@@ -62,7 +91,7 @@
       activeTab = path;
       return;
     }
-    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, loading, skipRefreshOnActivate: true, editorState: null, externalEdit: 0 });
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, loading, skipRefreshOnActivate: true, externalEdit: 0 });
     tabOrder.push(path);
     lastActiveFileTab = path;
     activeTab = path;
@@ -110,6 +139,7 @@
     if (idx === -1) return;
     const next = tabAfterClose(id);
     fileTabs.splice(idx, 1);
+    forgetEditorState(id);
     tabOrder = tabOrder.filter(t => t !== id);
     if (lastActiveFileTab === id) {
       lastActiveFileTab = fileTabs[idx]?.id ?? fileTabs[idx - 1]?.id ?? fileTabs[0]?.id ?? null;
@@ -168,7 +198,7 @@
   /**
    * Apply an outside edit to an open tab, mirroring how VS Code rewrites open
    * editors in place. `externalEdit` tells the editor to pull the new text in;
-   * the stored editor state is dropped because its doc is now stale.
+   * an editor mounting from cached state reconciles against `editContent`.
    * @param {string} path @param {string} next
    * @returns {boolean} false when the file is not open
    */
@@ -176,7 +206,6 @@
     const tab = fileTabById(path);
     if (!tab) return false;
     tab.editContent = next;
-    tab.editorState = null;
     tab.externalEdit = (tab.externalEdit ?? 0) + 1;
     return true;
   }
@@ -664,10 +693,10 @@
         {#if layoutMode === "split" && !isSearchTab(activeTab)}
           <button class="split-resize-handle" type="button" aria-label="Resize file and terminal panes" onmousedown={onSplitResizeStart}></button>
           <section class="workspace-pane workspace-pane-file" class:focused={visibleFileTab() && activeTab === visibleFileTab().id} style:flex-basis={splitOrientation === "down" ? `${splitRatio * 100}%` : undefined} aria-label="File pane" onpointerdown={focusFilePane}>
-            <FilePane tab={visibleFileTab()} active={visibleFileTab() && activeTab === visibleFileTab().id} reveal={revealTarget} {lspServers} {autosave} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+            <FilePane tab={visibleFileTab()} active={visibleFileTab() && activeTab === visibleFileTab().id} reveal={revealTarget} {lspServers} {autosave} {editorStateFor} onEditorState={saveEditorState} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
           </section>
         {:else if isFileTab(activeTab)}
-          <FilePane tab={visibleFileTab()} active={true} reveal={revealTarget} {lspServers} {autosave} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+          <FilePane tab={visibleFileTab()} active={true} reveal={revealTarget} {lspServers} {autosave} {editorStateFor} onEditorState={saveEditorState} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
         {/if}
 
         <section class="workspace-pane workspace-pane-search" class:hidden={!isSearchTab(activeTab)} aria-label="Search in files">
