@@ -702,6 +702,8 @@ html, body {
 .fm-md-preview code { background: var(--bg-surface); padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
 .fm-md-preview pre { background: var(--bg-surface); padding: 12px; border-radius: 6px; overflow-x: auto; }
 .fm-md-preview pre code { background: none; padding: 0; }
+.fm-mermaid { margin: 1em 0; overflow-x: auto; text-align: center; }
+.fm-mermaid svg { max-width: 100%; height: auto; }
 .fm-md-preview a { color: var(--accent-link); }
 .fm-md-preview blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--text-subtle); margin: 0.5em 0; }
 .fm-md-preview table { border-collapse: collapse; width: 100%; }
