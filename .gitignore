@@ -176,3 +176,4 @@ vite.config.ts.timestamp-*
 .codegraph/
 .understand-anything/
 .pi-subagents/
+.serena/
