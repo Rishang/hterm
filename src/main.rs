@@ -474,12 +474,14 @@ async fn serve_tcp(
     // ── Serve plain or TLS from the pre-bound std listener ───────────────────
     if let Some(tls) = tls_config {
         axum_server::from_tcp_rustls(std_listener, tls)
+            .unwrap()
             .handle(handle)
             .serve(app.into_make_service())
             .await
             .unwrap();
     } else {
         axum_server::from_tcp(std_listener)
+            .unwrap()
             .handle(handle)
             .serve(app.into_make_service())
             .await
