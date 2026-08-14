@@ -487,7 +487,11 @@ async fn serve_tcp(
 
 async fn serve_index(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return tools::unauthorized(&state.config);
+    }
     if let Some(content) = state.custom_index {
         axum::response::Html(content).into_response()
     } else {

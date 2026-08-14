@@ -82,12 +82,19 @@ pub async fn list_files_handler(
     (StatusCode::OK, Json(entries)).into_response()
 }
 
-pub async fn list_tools_handler() -> impl IntoResponse {
+pub async fn list_tools_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return tools::unauthorized(&state.config);
+    }
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
         tools::handle_tools_list_json(),
     )
+        .into_response()
 }
 
 pub async fn call_tool_handler(
