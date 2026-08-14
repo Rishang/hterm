@@ -77,7 +77,6 @@ paths:
                   fontFamily: "'JetBrains Mono', monospace"
                   fontSize: 14
                 writable: true
-                sixel: false
                 url_arg: false
 
   /api/exec:
@@ -841,9 +840,6 @@ components:
         writable:
           type: boolean
           description: Whether terminal is writable
-        sixel:
-          type: boolean
-          description: Sixel graphics support enabled
         url_arg:
           type: boolean
           description: Allow URL query arguments

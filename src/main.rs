@@ -147,12 +147,6 @@ struct Cli {
     #[arg(short = 'K', long = "ssl-key")]
     ssl_key: Option<String>,
 
-    // ── Terminal features ─────────────────────────────────────────────────────
-
-    /// Enable Sixel graphics support in the xterm.js frontend
-    #[arg(long = "sixel")]
-    sixel: bool,
-
     // ── Misc ──────────────────────────────────────────────────────────────────
 
     /// Enable debug-level logging
@@ -222,7 +216,6 @@ async fn main() {
     if cli.ssl                         { cfg.ssl           = true; }
     if let Some(c) = cli.ssl_cert      { cfg.ssl_cert      = c; }
     if let Some(k) = cli.ssl_key       { cfg.ssl_key       = k; }
-    if cli.sixel                       { cfg.sixel         = true; }
 
     // ── Validation ────────────────────────────────────────────────────────────
     if !Path::new(&cfg.shell).exists() {
@@ -262,7 +255,6 @@ async fn main() {
         serde_json::to_string(&ConfigResponse {
             theme:    cfg.theme.clone(),
             writable: cfg.writable,
-            sixel:    cfg.sixel,
             url_arg:  cfg.url_arg,
             cwd:      if cfg.cwd.is_empty() {
                 std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "/".to_string())

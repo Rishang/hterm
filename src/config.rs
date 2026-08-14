@@ -137,15 +137,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub ssl_key: String,
 
-    // ── Terminal feature hints (forwarded to the frontend) ────────────────────
-
-    /// Tell the frontend to enable Sixel graphics support in xterm.js.
-    ///
-    /// Sixel escape sequences pass through the PTY transparently; this flag
-    /// enables the xterm.js `SixelAddon` on the client side.
-    #[serde(default)]
-    pub sixel: bool,
-
     #[serde(default)]
     pub theme: ThemeConfig,
 }
@@ -181,7 +172,6 @@ impl Default for AppConfig {
             ssl:           false,
             ssl_cert:      String::new(),
             ssl_key:       String::new(),
-            sixel:         false,
             theme:         ThemeConfig::default(),
         }
     }
@@ -210,7 +200,6 @@ impl AppConfig {
 pub struct ConfigResponse {
     pub theme:    ThemeConfig,
     pub writable: bool,
-    pub sixel:    bool,
     pub url_arg:  bool,
     pub cwd:      String,
 }

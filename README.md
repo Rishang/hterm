@@ -35,7 +35,6 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 ### 🎨 **Modern Terminal**
 - Full Ghostty Web terminal integration
 - Custom themes & fonts
-- Sixel graphics support
 - Real-time resize handling
 
 ### 🗂️ **Workspace & Editor**
@@ -475,7 +474,6 @@ OPTIONS:
     -K, --ssl-key <PATH>           TLS private key (PEM)
 
     # Features
-    --sixel                        Enable Sixel graphics
     -d, --debug                    Debug logging
 
     # Configuration
