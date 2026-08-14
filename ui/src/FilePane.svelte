@@ -47,6 +47,7 @@
     const shellNames = new Set([".bashrc", ".bash_profile", ".bash_aliases", ".zshrc", ".zprofile", ".profile", ".fishrc", "bashrc", "zshrc", "profile"]);
     if (current.langOverride) return current.langOverride;
     if (fname === "dockerfile" || fname.startsWith("dockerfile.")) return "dockerfile";
+    if (fname === ".env" || fname.startsWith(".env.")) return "env";
     if (shellNames.has(fname)) return "sh";
     return current.path.split(".").pop()?.toLowerCase() ?? "";
   }

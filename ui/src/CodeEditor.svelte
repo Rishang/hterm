@@ -36,7 +36,7 @@
   add(["wast", "wat"], language(() => import("@codemirror/lang-wast"), "wast"));
 
   add(["toml"], legacy(() => import("@codemirror/legacy-modes/mode/toml"), "toml"));
-  add(["sh", "bash", "zsh", "fish"], legacy(() => import("@codemirror/legacy-modes/mode/shell"), "shell"));
+  add(["sh", "bash", "zsh", "fish", "env"], legacy(() => import("@codemirror/legacy-modes/mode/shell"), "shell"));
   add(["dockerfile"], legacy(() => import("@codemirror/legacy-modes/mode/dockerfile"), "dockerFile"));
   add(["config", "properties", "ini"], legacy(() => import("@codemirror/legacy-modes/mode/properties"), "properties"));
   add(["lua"], legacy(() => import("@codemirror/legacy-modes/mode/lua"), "lua"));
@@ -252,7 +252,8 @@
     const fname = path.split("/").pop()?.toLowerCase() ?? "";
     const SHELL_NAMES = new Set(['.bashrc','.bash_profile','.bash_aliases','.zshrc','.zprofile','.profile','.fishrc','bashrc','zshrc','profile']);
     const isDockerfile = fname === 'dockerfile' || fname.startsWith('dockerfile.');
-    const ext = lang || (isDockerfile ? "dockerfile" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? ""));
+    const isEnvFile = fname === '.env' || fname.startsWith('.env.');
+    const ext = lang || (isDockerfile ? "dockerfile" : isEnvFile ? "env" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? ""));
     const langExt = langMap[ext] ? await langMap[ext]() : [];
     if (disposed) return;
     const lspLanguage = lspLanguageForPath(path, ext);
