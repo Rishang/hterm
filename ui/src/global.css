@@ -11,15 +11,17 @@
   --bg-surface-stronger: #1e2228;
   --bg-context-hover: #2c313a;
   --bg-danger-muted: #3a2020;
-  --text-primary: #abb2bf;
-  --text-strong: #d7deebde;
-  --text-bright: #e6e6e6;
+  --text-primary: #b1b9c5;
+  --text-strong: #dce3ed;
+  --text-bright: #e9ebef;
   --text-inverse: #ffffff;
-  --text-subtle: #5c6370;
-  --text-muted: #6b737d;
-  --text-hidden: #6f7784;
-  --text-hidden-active: #9aa3ad;
-  --text-hidden-hover: #8c96a3;
+  --text-subtle: #687280;
+  /* Slightly brighter than secondary copy for persistent app chrome. */
+  --text-chrome: #707b8a;
+  --text-muted: #77818e;
+  --text-hidden: #76808e;
+  --text-hidden-active: #a0aab5;
+  --text-hidden-hover: #929daa;
   --accent: #61afef;
   --accent-link: #58a6ff;
   --accent-blue: #61afef;
@@ -33,7 +35,9 @@
   --terminal-black: #3f4451;
   --terminal-bright-black: #4f5666;
   --terminal-bright-white: #ffffff;
-  --search-match: #3a3f4b;
+  /* Selection is a half-strength band over the terminal background so text stays legible. */
+  --terminal-selection: #363c45;
+  --terminal-selection-overlay: rgba(69, 76, 85, 0.5);
   --border: #1d1f23;
   --border-strong: #181a1f;
   --border-muted: #454c55;
@@ -57,7 +61,6 @@
   --file-gray-bg: #abb2bf22;
   --scrollbar-size: 10px;
   --scrollbar-thumb: rgba(92,99,112,0.96);
-  --scrollbar-thumb-hover: rgba(112,120,132,0.98);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; border: none; }
@@ -176,34 +179,10 @@ html, body {
 
 /* ── Terminal ──────────────────────────────────────────────── */
 
-#terminal-container { flex: 1; min-width: 0; display: flex; overflow: hidden; }
-#terminal-container.hidden { display: none; }
-#terminal { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
-
 .term-wrap { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; background: var(--bg-primary); }
 .term-wrap.hidden { display: none; }
-.xterm { width: 100% !important; height: 100% !important; overflow: hidden; background: var(--bg-primary); }
-.xterm-rows { background: var(--bg-primary); }
-.xterm-viewport::-webkit-scrollbar {
-  width: 0; height: 0; display: none;
-}
-.xterm .scrollbar.vertical,
-.xterm .scrollbar.horizontal {
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-.xterm-screen {
-  position: relative;
-  overflow: hidden;
-  margin: 0 !important;
-  padding: 0 !important;
-  background: var(--transparent);
-}
-.xterm-viewport {
-  background-color: var(--transparent) !important;
-  scrollbar-width: none;
-  overflow-x: hidden !important; overflow-y: scroll !important;
-}
+.term-tab-wrap { background: var(--bg-primary); }
+.term-tab-wrap canvas { display: block; }
 
 /* ── File view (sidebar + content) ────────────────────────── */
 
@@ -245,7 +224,7 @@ html, body {
 }
 .fm-sidebar-title {
   font-size: 11px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-subtle);
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-chrome);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   cursor: pointer; flex: 1;
 }
@@ -257,7 +236,7 @@ html, body {
   border: 1px solid var(--accent) !important; border-radius: 3px; outline: none;
 }
 .fm-icon-btn {
-  background: none; color: var(--text-subtle);
+  background: none; color: var(--text-chrome);
   cursor: pointer; padding: 0 2px; line-height: 1; border-radius: 3px;
   flex-shrink: 0; margin-left: 2px;
 }
@@ -352,7 +331,7 @@ html, body {
 .tab-info-btn {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 100%; flex-shrink: 0;
-  background: none; color: var(--text-subtle);
+  background: none; color: var(--text-chrome);
   font-size: 16px; cursor: pointer;
   border-right: 1px solid var(--border-strong) !important;
   transition: color 0.12s;
@@ -400,7 +379,7 @@ html, body {
   justify-content: center;
   height: 20px;
   background: var(--transparent);
-  color: var(--text-subtle);
+  color: var(--text-chrome);
   cursor: pointer;
 }
 .split-action-btn {
@@ -561,7 +540,7 @@ html, body {
 .tab-new-btn {
   display: flex; align-items: center; justify-content: center;
   width: 28px; height: 100%; flex-shrink: 0;
-  background: none; color: var(--text-subtle);
+  background: none; color: var(--text-chrome);
   font-size: 20px; cursor: pointer;
   transition: color 0.12s;
 }
@@ -571,6 +550,17 @@ html, body {
   flex: 1; min-width: 0;
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--bg-primary);
+}
+
+/* Holds the active workspace tab while the sidebar remains a sibling in
+   #app-body's row. */
+.workspace-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .workspace-layout {
@@ -596,17 +586,30 @@ html, body {
   position: relative;
 }
 .workspace-pane-terminal {
+  flex: 1;
+}
+.workspace-layout.is-split .workspace-pane-terminal {
   flex: 0 1 50%;
 }
 .workspace-pane-file {
   flex: 1 1 0;
 }
+.workspace-pane-search {
+  flex: 1;
+  min-width: 0;
+}
+.workspace-pane.hidden {
+  display: none;
+}
+.workspace-layout.is-split-down .workspace-pane-file { order: 1; }
+.workspace-layout.is-split-down .split-resize-handle { order: 2; }
+.workspace-layout.is-split-down .workspace-pane-terminal { order: 3; }
 .workspace-pane.focused::after {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
-  box-shadow: inset 0 0 0 1px var(--accent-dim-border);
+  box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.15);
 }
 .split-resize-handle {
   width: 5px;
@@ -645,33 +648,23 @@ html, body {
   height: 1px;
 }
 
-.fm-save-btn {
-  background: var(--accent); color: var(--bg-primary);
-  font-size: 12px; padding: 3px 12px; border-radius: 4px; cursor: pointer; font-weight: 600;
-}
-.fm-save-btn:disabled { opacity: 0.5; cursor: default; }
-.fm-saved { font-size: 12px; color: var(--status-connected); }
-.fm-save-err { font-size: 12px; color: var(--status-disconnected); }
-
 /* Breadcrumb */
 .fm-breadcrumb {
   display: flex; align-items: center; gap: 4px;
   padding: 2px 12px; flex-shrink: 0;
   background: var(--bg-surface); border-top: 1px solid var(--border);
-  font-size: 12px; color: var(--text-subtle); overflow: hidden;
+  font-size: 12px; color: var(--text-chrome); overflow: hidden;
 }
-.fm-bc-sep { color: var(--border); }
-.fm-bc-part { color: var(--text-subtle); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-bc-part { color: var(--text-chrome); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-lsp-environment {
   max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 1px 5px; border: 1px solid var(--accent-dim-border); border-radius: 3px;
   background: var(--accent-dim); color: var(--accent); font: 11px 'SF Mono', 'Fira Code', monospace;
 }
 .fm-bc-tools { display: flex; align-items: center; gap: 6px; }
-.fm-bc-last { color: var(--text-primary); }
 .fm-lang-select {
   padding: 1px 4px;
-  background: var(--bg-surface); color: var(--text-subtle);
+  background: var(--bg-surface); color: var(--text-chrome);
   border: 1px solid var(--border); border-radius: 3px;
   font-size: 13px; cursor: pointer; outline: none;
   scrollbar-color: var(--border) var(--transparent); scrollbar-width: thin;
@@ -682,7 +675,7 @@ html, body {
 .fm-lang-select:hover { border-color: var(--text-subtle); }
 .fm-preview-btn {
   padding: 2px 8px;
-  background: var(--bg-surface); color: var(--text-subtle);
+  background: var(--bg-surface); color: var(--text-chrome);
   border: 1px solid var(--border); border-radius: 3px;
   font-size: 12px; cursor: pointer; outline: none;
 }
@@ -702,6 +695,8 @@ html, body {
 .fm-md-preview code { background: var(--bg-surface); padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
 .fm-md-preview pre { background: var(--bg-surface); padding: 12px; border-radius: 6px; overflow-x: auto; }
 .fm-md-preview pre code { background: none; padding: 0; }
+.fm-mermaid { margin: 1em 0; overflow-x: auto; text-align: center; }
+.fm-mermaid svg { max-width: 100%; height: auto; }
 .fm-md-preview a { color: var(--accent-link); }
 .fm-md-preview blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--text-subtle); margin: 0.5em 0; }
 .fm-md-preview table { border-collapse: collapse; width: 100%; }
@@ -745,16 +740,6 @@ html, body {
 .fm-error-main { padding: 16px; }
 
 /* ── Custom search panel (VS Code floating style) ──────────────────────────── */
-.cm-panels-bottom {
-  position: absolute !important;
-  top: 0 !important; right: 0 !important; bottom: auto !important; left: auto !important;
-  background: var(--transparent) !important; border: none !important;
-  z-index: 20 !important; width: max-content !important;
-  max-width: 100% !important;
-}
-.cm-panels-bottom > .csb {
-  margin-left: auto;
-}
 .csb {
   display: inline-flex; align-items: stretch; gap: 0;
   background: var(--bg-surface-active); border: 1px solid var(--border-muted); border-top: none;
@@ -792,6 +777,199 @@ html, body {
 .csb-close { font-size: 14px; padding: 0 4px; }
 .csb-close:hover { color: var(--status-disconnected); background: var(--danger-dim); }
 .csb-replace-row .csb-btn { font-size: 10px; }
+
+/* ── Search in files (project-wide) ────────────────────────────────────────── */
+/* Rendered in a normal workspace tab, so its results never cover another pane. */
+.gs-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-strong);
+  font-family: 'SF Pro Text','Segoe UI',system-ui,sans-serif;
+}
+.gs-bar {
+  display: grid;
+  /* chevron | inputs | actions */
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+}
+.gs-expand { margin-top: 3px; }
+.gs-expand.csb-expanded { transform: rotate(90deg); }
+.gs-fields, .gs-query-row, .gs-glob-row { min-width: 0; }
+.gs-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.gs-query-row, .gs-glob-row { gap: 4px; }
+.gs-input {
+  flex: 1; min-width: 0; width: auto;
+  background: var(--bg-surface-strong);
+  border-color: var(--border-muted);
+}
+.gs-glob-input {
+  flex: 1; min-width: 0; width: auto;
+  background: var(--bg-surface-strong);
+  border-color: var(--border-muted);
+  font-family: 'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace; font-size: 12px;
+}
+.gs-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; height: 25px; }
+.gs-actions .csb-btn { font-size: 15px; }
+.gs-count { min-width: 62px; text-align: right; }
+.gs-error { padding: 6px 12px 10px; color: var(--status-disconnected); font-size: 12px; }
+.gs-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  scrollbar-color: var(--scrollbar-thumb) var(--transparent); scrollbar-width: thin;
+}
+.gs-file {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; font-size: 13px;
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bg-surface);
+}
+.gs-file-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 15px; height: 14px; padding: 0 2px;
+  border-radius: 2px; font-size: 8px; font-weight: 700; flex-shrink: 0;
+}
+.gs-file-name { color: var(--text-primary); font-size: 14px; font-weight: 600; flex-shrink: 0; }
+.gs-file-dir {
+  color: var(--text-subtle); font-size: 11px; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left;
+}
+.gs-file-count { color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.gs-hit {
+  display: flex; align-items: baseline; gap: 8px;
+  width: 100%; padding: 2px 10px 2px 22px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  font-family: 'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace; font-size: 13px;
+  color: var(--text-subtle);
+}
+.gs-hit:hover { background: var(--bg-surface-hover); }
+.gs-hit.is-selected { background: var(--bg-surface-active); color: var(--text-primary); }
+.gs-hit-line { color: var(--text-muted); min-width: 38px; text-align: right; flex-shrink: 0; }
+.gs-hit-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.gs-mark { background: var(--accent-dim-strong); color: var(--accent); border-radius: 2px; }
+.gs-truncated { padding: 6px 10px; font-size: 11px; color: var(--text-muted); }
+
+/* ── Search: replace ─────────────────────────────────────────────────────── */
+.gs-replace-row { gap: 4px; }
+.gs-replace-all {
+  flex-shrink: 0;
+  width: auto;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.gs-replace-all:disabled { opacity: 0.4; cursor: default; }
+
+/* Summary + hint keep the panel from ever looking empty or ambiguous. */
+.gs-summary {
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+.gs-summary + .gs-results { border-top: none; }
+.gs-hint {
+  padding: 14px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.gs-hint-dim { color: var(--text-subtle); font-size: 11px; }
+.gs-kbd {
+  display: inline-block;
+  padding: 0 4px;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--text-primary);
+  background: var(--bg-surface-strong);
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+}
+
+/* Destructive action — deliberately louder than the rest of the panel. */
+.gs-confirm {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--danger-dim);
+  border-top: 1px solid var(--status-disconnected);
+}
+.gs-confirm-text { flex: 1; min-width: 0; }
+.gs-confirm-text strong { color: var(--status-disconnected); font-weight: 600; }
+.gs-confirm .csb-btn {
+  width: auto; padding: 2px 10px; font-size: 11px; font-weight: 600;
+  border: 1px solid var(--border-muted); border-radius: 3px;
+}
+.gs-confirm-go {
+  background: var(--status-disconnected);
+  color: var(--text-inverse);
+  border-color: var(--status-disconnected) !important;
+}
+.gs-notice {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--accent-green);
+  border-top: 1px solid var(--border);
+}
+.gs-replace-error {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--status-disconnected);
+  background: var(--danger-dim);
+  border-top: 1px solid var(--border);
+}
+
+/* Row actions brighten when their result is active. */
+.gs-hit-row { display: flex; align-items: stretch; min-width: 0; }
+.gs-hit-row .gs-hit { flex: 1; min-width: 0; }
+.gs-row-action {
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-subtle);
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.1s, color 0.1s;
+}
+.gs-row-action:hover { color: var(--text-primary); background: var(--bg-surface-hover); }
+.gs-row-action:disabled { opacity: 0.25; cursor: default; }
+.gs-hit-row:hover .gs-row-action,
+.gs-hit-row:focus-within .gs-row-action,
+.gs-file:hover .gs-row-action,
+.gs-file:focus-within .gs-row-action { opacity: 1; }
+.gs-hit-row:has(.is-selected) .gs-row-action { opacity: 1; }
+.gs-row-action:focus-visible { opacity: 1; outline: 1px solid var(--accent); outline-offset: -1px; }
+
+/* old → new preview */
+.gs-del {
+  background: var(--danger-dim);
+  color: var(--status-disconnected);
+  text-decoration: line-through;
+  border-radius: 2px;
+}
+.gs-ins {
+  background: var(--accent-dim-strong);
+  color: var(--accent-green);
+  text-decoration: none;
+  border-radius: 2px;
+  margin-left: 2px;
+}
 
 /* ── File Manager CRUD ─────────────────────────────────────────────────────── */
 .fm-inline-input {
@@ -853,6 +1031,8 @@ html, body {
 .fm-ctx-disabled:hover { background: var(--transparent) !important; color: var(--text-subtle) !important; }
 
 @media (max-width: 760px) {
+  .gs-bar { grid-template-columns: minmax(0, 1fr); }
+  .gs-actions { justify-self: end; }
   .split-control {
     margin-inline: 4px;
   }

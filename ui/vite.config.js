@@ -10,7 +10,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('@xterm/')) return 'xterm';
+          if (id.includes('ghostty-web')) return 'ghostty';
           // lang-* and legacy-modes are dynamic imports in CodeEditor — let Rollup keep them as individual chunks
           if (id.includes('@codemirror/lang-') || id.includes('@codemirror/legacy-modes')) return undefined;
           if (id.includes('@codemirror/') || id.includes('@lezer/') || id.includes('@replit/codemirror')) return 'codemirror';

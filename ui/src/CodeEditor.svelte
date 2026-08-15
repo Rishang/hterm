@@ -1,138 +1,107 @@
 <script module>
-  const langMap = {
-    js:     () => import("@codemirror/lang-javascript").then(m => m.javascript()),
-    mjs:    () => import("@codemirror/lang-javascript").then(m => m.javascript()),
-    jsx:    () => import("@codemirror/lang-javascript").then(m => m.javascript({ jsx: true })),
-    ts:     () => import("@codemirror/lang-javascript").then(m => m.javascript({ typescript: true })),
-    tsx:    () => import("@codemirror/lang-javascript").then(m => m.javascript({ jsx: true, typescript: true })),
-    html:   () => import("@codemirror/lang-html").then(m => m.html()),
-    htm:    () => import("@codemirror/lang-html").then(m => m.html()),
-    tpl:    () => import("@codemirror/lang-html").then(m => m.html()),
-    svelte: () => import("@codemirror/lang-html").then(m => m.html()),
-    vue:    () => import("@codemirror/lang-vue").then(m => m.vue()),
-    angular:() => import("@codemirror/lang-angular").then(m => m.angular()),
-    css:    () => import("@codemirror/lang-css").then(m => m.css()),
-    scss:   () => import("@codemirror/lang-css").then(m => m.css()),
-    json:   () => import("@codemirror/lang-json").then(m => m.json()),
-    php:    () => import("@codemirror/lang-php").then(m => m.php()),
-    phtml:  () => import("@codemirror/lang-php").then(m => m.php()),
-    py:     () => import("@codemirror/lang-python").then(m => m.python()),
-    rs:     () => import("@codemirror/lang-rust").then(m => m.rust()),
-    cpp:    () => import("@codemirror/lang-cpp").then(m => m.cpp()),
-    c:      () => import("@codemirror/lang-cpp").then(m => m.cpp()),
-    h:      () => import("@codemirror/lang-cpp").then(m => m.cpp()),
-    md:     () => import("@codemirror/lang-markdown").then(m => m.markdown()),
-    xml:    () => import("@codemirror/lang-xml").then(m => m.xml()),
-    sql:    () => import("@codemirror/lang-sql").then(m => m.sql()),
-    yaml:   () => import("@codemirror/lang-yaml").then(m => m.yaml()),
-    yml:    () => import("@codemirror/lang-yaml").then(m => m.yaml()),
-    helm:   () => import("@codemirror/lang-yaml").then(m => m.yaml()),
-    kubernetes: () => import("@codemirror/lang-yaml").then(m => m.yaml()),
-    k8s:    () => import("@codemirror/lang-yaml").then(m => m.yaml()),
-    go:     () => import("@codemirror/lang-go").then(m => m.go()),
-    lezer:  () => import("@codemirror/lang-lezer").then(m => m.lezer()),
-    grammar:() => import("@codemirror/lang-lezer").then(m => m.lezer()),
-    wast:   () => import("@codemirror/lang-wast").then(m => m.wast()),
-    wat:    () => import("@codemirror/lang-wast").then(m => m.wast()),
-    toml:   () => Promise.all([import("@codemirror/legacy-modes/mode/toml"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.toml)),
-    sh:     () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
-    bash:   () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
-    zsh:    () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
-    fish:   () => Promise.all([import("@codemirror/legacy-modes/mode/shell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.shell)),
-    dockerfile: () => Promise.all([import("@codemirror/legacy-modes/mode/dockerfile"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dockerFile)),
-    config:     () => Promise.all([import("@codemirror/legacy-modes/mode/properties"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.properties)),
-    properties: () => Promise.all([import("@codemirror/legacy-modes/mode/properties"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.properties)),
-    ini:        () => Promise.all([import("@codemirror/legacy-modes/mode/properties"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.properties)),
-    lua:    () => Promise.all([import("@codemirror/legacy-modes/mode/lua"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.lua)),
-    rb:     () => Promise.all([import("@codemirror/legacy-modes/mode/ruby"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.ruby)),
-    ruby:   () => Promise.all([import("@codemirror/legacy-modes/mode/ruby"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.ruby)),
-    pl:     () => Promise.all([import("@codemirror/legacy-modes/mode/perl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.perl)),
-    pm:     () => Promise.all([import("@codemirror/legacy-modes/mode/perl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.perl)),
-    perl:   () => Promise.all([import("@codemirror/legacy-modes/mode/perl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.perl)),
-    r:      () => Promise.all([import("@codemirror/legacy-modes/mode/r"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.r)),
-    R:      () => Promise.all([import("@codemirror/legacy-modes/mode/r"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.r)),
-    swift:  () => Promise.all([import("@codemirror/legacy-modes/mode/swift"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.swift)),
-    kt:     () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.kotlin)),
-    kotlin: () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.kotlin)),
-    java:   () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.java)),
-    cs:     () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.csharp)),
-    csharp: () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.csharp)),
-    scala:  () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.scala)),
-    dart:   () => Promise.all([import("@codemirror/legacy-modes/mode/clike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dart)),
-    groovy: () => Promise.all([import("@codemirror/legacy-modes/mode/groovy"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.groovy)),
-    jl:     () => Promise.all([import("@codemirror/legacy-modes/mode/julia"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.julia)),
-    julia:  () => Promise.all([import("@codemirror/legacy-modes/mode/julia"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.julia)),
-    hs:     () => Promise.all([import("@codemirror/legacy-modes/mode/haskell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.haskell)),
-    haskell:() => Promise.all([import("@codemirror/legacy-modes/mode/haskell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.haskell)),
-    clj:    () => Promise.all([import("@codemirror/legacy-modes/mode/clojure"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.clojure)),
-    cljs:   () => Promise.all([import("@codemirror/legacy-modes/mode/clojure"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.clojure)),
-    erl:    () => Promise.all([import("@codemirror/legacy-modes/mode/erlang"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.erlang)),
-    elm:    () => Promise.all([import("@codemirror/legacy-modes/mode/elm"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.elm)),
-    ex:     () => Promise.all([import("@codemirror/legacy-modes/mode/erlang"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.erlang)),
-    exs:    () => Promise.all([import("@codemirror/legacy-modes/mode/erlang"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.erlang)),
-    ml:     () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.oCaml)),
-    mli:    () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.oCaml)),
-    fs:     () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.fSharp)),
-    fsx:    () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.fSharp)),
-    sml:    () => Promise.all([import("@codemirror/legacy-modes/mode/mllike"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sml)),
-    coffee: () => Promise.all([import("@codemirror/legacy-modes/mode/coffeescript"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.coffeeScript)),
-    cr:     () => Promise.all([import("@codemirror/legacy-modes/mode/crystal"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.crystal)),
-    d:      () => Promise.all([import("@codemirror/legacy-modes/mode/d"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.d)),
-    f:      () => Promise.all([import("@codemirror/legacy-modes/mode/fortran"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.fortran)),
-    f90:    () => Promise.all([import("@codemirror/legacy-modes/mode/fortran"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.fortran)),
-    pas:    () => Promise.all([import("@codemirror/legacy-modes/mode/pascal"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.pascal)),
-    scm:    () => Promise.all([import("@codemirror/legacy-modes/mode/scheme"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.scheme)),
-    lisp:   () => Promise.all([import("@codemirror/legacy-modes/mode/commonlisp"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.commonLisp)),
-    cl:     () => Promise.all([import("@codemirror/legacy-modes/mode/commonlisp"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.commonLisp)),
-    tcl:    () => Promise.all([import("@codemirror/legacy-modes/mode/tcl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.tcl)),
-    m:      () => Promise.all([import("@codemirror/legacy-modes/mode/octave"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.octave)),
-    vb:     () => Promise.all([import("@codemirror/legacy-modes/mode/vb"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.vb)),
-    vbs:    () => Promise.all([import("@codemirror/legacy-modes/mode/vbscript"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.vbScript)),
-    ps1:    () => Promise.all([import("@codemirror/legacy-modes/mode/powershell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.powerShell)),
-    psm1:   () => Promise.all([import("@codemirror/legacy-modes/mode/powershell"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.powerShell)),
-    v:      () => Promise.all([import("@codemirror/legacy-modes/mode/verilog"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.verilog)),
-    sv:     () => Promise.all([import("@codemirror/legacy-modes/mode/verilog"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.verilog)),
-    vhd:    () => Promise.all([import("@codemirror/legacy-modes/mode/vhdl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.vhdl)),
-    vhdl:   () => Promise.all([import("@codemirror/legacy-modes/mode/vhdl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.vhdl)),
-    diff:   () => Promise.all([import("@codemirror/legacy-modes/mode/diff"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.diff)),
-    patch:  () => Promise.all([import("@codemirror/legacy-modes/mode/diff"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.diff)),
-    proto:  () => Promise.all([import("@codemirror/legacy-modes/mode/protobuf"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.protobuf)),
-    cmake:  () => Promise.all([import("@codemirror/legacy-modes/mode/cmake"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.cmake)),
-    nginx:  () => Promise.all([import("@codemirror/legacy-modes/mode/nginx"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.nginx)),
-    pug:    () => Promise.all([import("@codemirror/legacy-modes/mode/pug"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.pug)),
-    jade:   () => Promise.all([import("@codemirror/legacy-modes/mode/pug"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.pug)),
-    styl:   () => Promise.all([import("@codemirror/legacy-modes/mode/stylus"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.stylus)),
-    sass:   () => Promise.all([import("@codemirror/legacy-modes/mode/sass"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sass)),
-    tex:    () => Promise.all([import("@codemirror/legacy-modes/mode/stex"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.stex)),
-    latex:  () => Promise.all([import("@codemirror/legacy-modes/mode/stex"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.stex)),
-    textile:() => Promise.all([import("@codemirror/legacy-modes/mode/textile"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.textile)),
-    sparql: () => Promise.all([import("@codemirror/legacy-modes/mode/sparql"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sparql)),
-    ttl:    () => Promise.all([import("@codemirror/legacy-modes/mode/turtle"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.turtle)),
-    hx:     () => Promise.all([import("@codemirror/legacy-modes/mode/haxe"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.haxe)),
-    nsi:    () => Promise.all([import("@codemirror/legacy-modes/mode/nsis"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.nsis)),
-    nsis:   () => Promise.all([import("@codemirror/legacy-modes/mode/nsis"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.nsis)),
-    feature:() => Promise.all([import("@codemirror/legacy-modes/mode/gherkin"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.gherkin)),
-    pp:     () => Promise.all([import("@codemirror/legacy-modes/mode/puppet"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.puppet)),
-    q:      () => Promise.all([import("@codemirror/legacy-modes/mode/q"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.q)),
-    apl:    () => Promise.all([import("@codemirror/legacy-modes/mode/apl"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.apl)),
-    bf:     () => Promise.all([import("@codemirror/legacy-modes/mode/brainfuck"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.brainfuck)),
-    forth:  () => Promise.all([import("@codemirror/legacy-modes/mode/forth"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.forth)),
-    factor: () => Promise.all([import("@codemirror/legacy-modes/mode/factor"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.factor)),
-    oz:     () => Promise.all([import("@codemirror/legacy-modes/mode/oz"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.oz)),
-    pig:    () => Promise.all([import("@codemirror/legacy-modes/mode/pig"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.pig)),
-    sas:    () => Promise.all([import("@codemirror/legacy-modes/mode/sas"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.sas)),
-    st:     () => Promise.all([import("@codemirror/legacy-modes/mode/smalltalk"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.smalltalk)),
-    cob:    () => Promise.all([import("@codemirror/legacy-modes/mode/cobol"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.cobol)),
-    cobol:  () => Promise.all([import("@codemirror/legacy-modes/mode/cobol"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.cobol)),
-    ebnf:   () => Promise.all([import("@codemirror/legacy-modes/mode/ebnf"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.ebnf)),
-    dylan:  () => Promise.all([import("@codemirror/legacy-modes/mode/dylan"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.dylan)),
-    ls:     () => Promise.all([import("@codemirror/legacy-modes/mode/livescript"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.liveScript)),
-    mathematica: () => Promise.all([import("@codemirror/legacy-modes/mode/mathematica"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.mathematica)),
-    wl:     () => Promise.all([import("@codemirror/legacy-modes/mode/mathematica"), import("@codemirror/language")]).then(([m, { StreamLanguage }]) => StreamLanguage.define(m.mathematica)),
-    tf:     () => import("codemirror-lang-terraform").then(m => m.terraform()),
-    tfvars: () => import("codemirror-lang-terraform").then(m => m.terraform()),
-    hcl:    () => import("codemirror-lang-terraform").then(m => m.terraform()),
-  };
+  const langMap = {};
+
+  function add(names, loader) {
+    for (const name of names) langMap[name] = loader;
+  }
+
+  function language(importer, name, options) {
+    return () => importer().then(module => module[name](options));
+  }
+
+  function legacy(importer, name) {
+    return () => Promise.all([importer(), import("@codemirror/language")])
+      .then(([module, { StreamLanguage }]) => StreamLanguage.define(module[name]));
+  }
+
+  add(["js", "mjs"], language(() => import("@codemirror/lang-javascript"), "javascript"));
+  add(["jsx"], language(() => import("@codemirror/lang-javascript"), "javascript", { jsx: true }));
+  add(["ts"], language(() => import("@codemirror/lang-javascript"), "javascript", { typescript: true }));
+  add(["tsx"], language(() => import("@codemirror/lang-javascript"), "javascript", { jsx: true, typescript: true }));
+  add(["html", "htm", "tpl", "svelte"], language(() => import("@codemirror/lang-html"), "html"));
+  add(["vue"], language(() => import("@codemirror/lang-vue"), "vue"));
+  add(["angular"], language(() => import("@codemirror/lang-angular"), "angular"));
+  add(["css", "scss"], language(() => import("@codemirror/lang-css"), "css"));
+  add(["json"], language(() => import("@codemirror/lang-json"), "json"));
+  add(["php", "phtml"], language(() => import("@codemirror/lang-php"), "php"));
+  add(["py"], language(() => import("@codemirror/lang-python"), "python"));
+  add(["rs"], language(() => import("@codemirror/lang-rust"), "rust"));
+  add(["cpp", "c", "h"], language(() => import("@codemirror/lang-cpp"), "cpp"));
+  add(["md"], language(() => import("@codemirror/lang-markdown"), "markdown"));
+  add(["xml"], language(() => import("@codemirror/lang-xml"), "xml"));
+  add(["sql"], language(() => import("@codemirror/lang-sql"), "sql"));
+  add(["yaml", "yml", "helm", "kubernetes", "k8s"], language(() => import("@codemirror/lang-yaml"), "yaml"));
+  add(["go"], language(() => import("@codemirror/lang-go"), "go"));
+  add(["lezer", "grammar"], language(() => import("@codemirror/lang-lezer"), "lezer"));
+  add(["wast", "wat"], language(() => import("@codemirror/lang-wast"), "wast"));
+
+  add(["toml"], legacy(() => import("@codemirror/legacy-modes/mode/toml"), "toml"));
+  add(["sh", "bash", "zsh", "fish", "env"], legacy(() => import("@codemirror/legacy-modes/mode/shell"), "shell"));
+  add(["dockerfile"], legacy(() => import("@codemirror/legacy-modes/mode/dockerfile"), "dockerFile"));
+  add(["config", "properties", "ini"], legacy(() => import("@codemirror/legacy-modes/mode/properties"), "properties"));
+  add(["lua"], legacy(() => import("@codemirror/legacy-modes/mode/lua"), "lua"));
+  add(["rb", "ruby"], legacy(() => import("@codemirror/legacy-modes/mode/ruby"), "ruby"));
+  add(["pl", "pm", "perl"], legacy(() => import("@codemirror/legacy-modes/mode/perl"), "perl"));
+  add(["r", "R"], legacy(() => import("@codemirror/legacy-modes/mode/r"), "r"));
+  add(["swift"], legacy(() => import("@codemirror/legacy-modes/mode/swift"), "swift"));
+  add(["kt", "kotlin"], legacy(() => import("@codemirror/legacy-modes/mode/clike"), "kotlin"));
+  add(["java"], legacy(() => import("@codemirror/legacy-modes/mode/clike"), "java"));
+  add(["cs", "csharp"], legacy(() => import("@codemirror/legacy-modes/mode/clike"), "csharp"));
+  add(["scala"], legacy(() => import("@codemirror/legacy-modes/mode/clike"), "scala"));
+  add(["dart"], legacy(() => import("@codemirror/legacy-modes/mode/clike"), "dart"));
+  add(["groovy"], legacy(() => import("@codemirror/legacy-modes/mode/groovy"), "groovy"));
+  add(["jl", "julia"], legacy(() => import("@codemirror/legacy-modes/mode/julia"), "julia"));
+  add(["hs", "haskell"], legacy(() => import("@codemirror/legacy-modes/mode/haskell"), "haskell"));
+  add(["clj", "cljs"], legacy(() => import("@codemirror/legacy-modes/mode/clojure"), "clojure"));
+  add(["erl", "ex", "exs"], legacy(() => import("@codemirror/legacy-modes/mode/erlang"), "erlang"));
+  add(["elm"], legacy(() => import("@codemirror/legacy-modes/mode/elm"), "elm"));
+  add(["ml", "mli"], legacy(() => import("@codemirror/legacy-modes/mode/mllike"), "oCaml"));
+  add(["fs", "fsx"], legacy(() => import("@codemirror/legacy-modes/mode/mllike"), "fSharp"));
+  add(["sml"], legacy(() => import("@codemirror/legacy-modes/mode/mllike"), "sml"));
+  add(["coffee"], legacy(() => import("@codemirror/legacy-modes/mode/coffeescript"), "coffeeScript"));
+  add(["cr"], legacy(() => import("@codemirror/legacy-modes/mode/crystal"), "crystal"));
+  add(["d"], legacy(() => import("@codemirror/legacy-modes/mode/d"), "d"));
+  add(["f", "f90"], legacy(() => import("@codemirror/legacy-modes/mode/fortran"), "fortran"));
+  add(["pas"], legacy(() => import("@codemirror/legacy-modes/mode/pascal"), "pascal"));
+  add(["scm"], legacy(() => import("@codemirror/legacy-modes/mode/scheme"), "scheme"));
+  add(["lisp", "cl"], legacy(() => import("@codemirror/legacy-modes/mode/commonlisp"), "commonLisp"));
+  add(["tcl"], legacy(() => import("@codemirror/legacy-modes/mode/tcl"), "tcl"));
+  add(["m"], legacy(() => import("@codemirror/legacy-modes/mode/octave"), "octave"));
+  add(["vb"], legacy(() => import("@codemirror/legacy-modes/mode/vb"), "vb"));
+  add(["vbs"], legacy(() => import("@codemirror/legacy-modes/mode/vbscript"), "vbScript"));
+  add(["ps1", "psm1"], legacy(() => import("@codemirror/legacy-modes/mode/powershell"), "powerShell"));
+  add(["v", "sv"], legacy(() => import("@codemirror/legacy-modes/mode/verilog"), "verilog"));
+  add(["vhd", "vhdl"], legacy(() => import("@codemirror/legacy-modes/mode/vhdl"), "vhdl"));
+  add(["diff", "patch"], legacy(() => import("@codemirror/legacy-modes/mode/diff"), "diff"));
+  add(["proto"], legacy(() => import("@codemirror/legacy-modes/mode/protobuf"), "protobuf"));
+  add(["cmake"], legacy(() => import("@codemirror/legacy-modes/mode/cmake"), "cmake"));
+  add(["nginx"], legacy(() => import("@codemirror/legacy-modes/mode/nginx"), "nginx"));
+  add(["pug", "jade"], legacy(() => import("@codemirror/legacy-modes/mode/pug"), "pug"));
+  add(["styl"], legacy(() => import("@codemirror/legacy-modes/mode/stylus"), "stylus"));
+  add(["sass"], legacy(() => import("@codemirror/legacy-modes/mode/sass"), "sass"));
+  add(["tex", "latex"], legacy(() => import("@codemirror/legacy-modes/mode/stex"), "stex"));
+  add(["textile"], legacy(() => import("@codemirror/legacy-modes/mode/textile"), "textile"));
+  add(["sparql"], legacy(() => import("@codemirror/legacy-modes/mode/sparql"), "sparql"));
+  add(["ttl"], legacy(() => import("@codemirror/legacy-modes/mode/turtle"), "turtle"));
+  add(["hx"], legacy(() => import("@codemirror/legacy-modes/mode/haxe"), "haxe"));
+  add(["nsi", "nsis"], legacy(() => import("@codemirror/legacy-modes/mode/nsis"), "nsis"));
+  add(["feature"], legacy(() => import("@codemirror/legacy-modes/mode/gherkin"), "gherkin"));
+  add(["pp"], legacy(() => import("@codemirror/legacy-modes/mode/puppet"), "puppet"));
+  add(["q"], legacy(() => import("@codemirror/legacy-modes/mode/q"), "q"));
+  add(["apl"], legacy(() => import("@codemirror/legacy-modes/mode/apl"), "apl"));
+  add(["bf"], legacy(() => import("@codemirror/legacy-modes/mode/brainfuck"), "brainfuck"));
+  add(["forth"], legacy(() => import("@codemirror/legacy-modes/mode/forth"), "forth"));
+  add(["factor"], legacy(() => import("@codemirror/legacy-modes/mode/factor"), "factor"));
+  add(["oz"], legacy(() => import("@codemirror/legacy-modes/mode/oz"), "oz"));
+  add(["pig"], legacy(() => import("@codemirror/legacy-modes/mode/pig"), "pig"));
+  add(["sas"], legacy(() => import("@codemirror/legacy-modes/mode/sas"), "sas"));
+  add(["st"], legacy(() => import("@codemirror/legacy-modes/mode/smalltalk"), "smalltalk"));
+  add(["cob", "cobol"], legacy(() => import("@codemirror/legacy-modes/mode/cobol"), "cobol"));
+  add(["ebnf"], legacy(() => import("@codemirror/legacy-modes/mode/ebnf"), "ebnf"));
+  add(["dylan"], legacy(() => import("@codemirror/legacy-modes/mode/dylan"), "dylan"));
+  add(["ls"], legacy(() => import("@codemirror/legacy-modes/mode/livescript"), "liveScript"));
+  add(["mathematica", "wl"], legacy(() => import("@codemirror/legacy-modes/mode/mathematica"), "mathematica"));
+  add(["tf", "tfvars", "hcl"], language(() => import("codemirror-lang-terraform"), "terraform"));
 
   export const supportedLangs = Object.keys(langMap).sort();
 </script>
@@ -143,7 +112,7 @@
   import { EditorState } from "@codemirror/state";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter } from "@codemirror/language";
-  import { search, searchKeymap, findNext, findPrevious, selectMatches, getSearchQuery, setSearchQuery, SearchQuery, closeSearchPanel, openSearchPanel, replaceNext, replaceAll } from "@codemirror/search";
+  import { search, searchKeymap, findNext, findPrevious, selectMatches, getSearchQuery, setSearchQuery, SearchQuery, closeSearchPanel, replaceNext, replaceAll } from "@codemirror/search";
   import { autocompletion, completeAnyWord } from "@codemirror/autocomplete";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { showMinimap } from "@replit/codemirror-minimap";
@@ -154,16 +123,40 @@
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
-  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, active?: boolean, searchTrigger?: number, savedState?: import("@codemirror/state").EditorState | null, lspServers?: Record<string, string>, onlsenvironment?: (environment: { kind: string, name: string, path?: string }) => void, onchange?: (v: string) => void, onsave?: () => void, onsavedstate?: (s: import("@codemirror/state").EditorState) => void }} */
-  let { path, value, readonly = false, lang = "", active = true, searchTrigger = 0, savedState = null, lspServers = {}, onlsenvironment, onchange, onsave, onsavedstate } = $props();
+  /** @type {{ path: string, value: string, readonly?: boolean, lang?: string, active?: boolean, reveal?: { path: string, line: number, column: number, length: number, focus: boolean, nonce: number } | null, externalEdit?: number, savedState?: import("@codemirror/state").EditorState | null, lspServers?: Record<string, string>, onlsenvironment?: (environment: { kind: string, name: string, path?: string }) => void, onchange?: (v: string) => void, onsave?: () => void, onsavedstate?: (s: import("@codemirror/state").EditorState | undefined, path: string, language: string) => void }} */
+  let { path, value, readonly = false, lang = "", active = true, reveal = null, externalEdit = 0, savedState = null, lspServers = {}, onlsenvironment, onchange, onsave, onsavedstate } = $props();
+  // Pinned at init: props can update before Svelte destroys a keyed component,
+  // so the identity that built this editor is captured while it is still ours.
+  const editorPath = path;
+  const editorLanguage = lang;
   let disposed = false;
 
   /** @type {HTMLElement} */
   let container;
   /** @type {EditorView | null} */
   let view = null;
-  let seenSearchTrigger = $state(0);
-  let searchTriggerReady = $state(false);
+  /** Last applied `reveal.nonce`, so the same jump is never re-applied. */
+  let appliedReveal = 0;
+  /** Last applied `externalEdit` counter, so a buffer sync runs once. */
+  let appliedExternalEdit = 0;
+  /** A jump requested before the (async) editor finished mounting. */
+  let pendingReveal = null;
+
+  /** Select the matched text and scroll it into view. @param {{ line: number, column: number, length: number, focus?: boolean }} target */
+  function applyReveal(target) {
+    if (!view || !target) return;
+    const doc = view.state.doc;
+    const line = doc.line(Math.max(1, Math.min(target.line || 1, doc.lines)));
+    const from = Math.min(line.to, line.from + Math.max(0, (target.column || 1) - 1));
+    const to = Math.min(line.to, from + Math.max(0, target.length || 0));
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      effects: EditorView.scrollIntoView(from, { y: "center" }),
+    });
+    // Only take focus when this pane is on screen AND the caller asked for it —
+    // stepping through search results must leave focus in the search box.
+    if (active && target.focus) view.focus();
+  }
 
   /** @param {import("@codemirror/view").EditorView} v */
   function createSearchPanel(v) {
@@ -228,8 +221,21 @@
 
     return {
       dom,
-      top: false,
-      mount() { panel.focusSearch?.(); },
+      top: true,
+      mount() {
+        // The panel's `bind:this` is attached asynchronously, so focusing on
+        // this tick can silently no-op and leave the caret in the editor.
+        // Defer, and fall back to the raw input if the export isn't ready.
+        queueMicrotask(() => {
+          if (panel?.focusSearch) {
+            panel.focusSearch();
+            return;
+          }
+          const field = /** @type {HTMLInputElement | null} */ (dom.querySelector("input"));
+          field?.focus();
+          field?.select();
+        });
+      },
       update(update) {
         // sync match count from search state
         const q = getSearchQuery(update.state);
@@ -246,7 +252,8 @@
     const fname = path.split("/").pop()?.toLowerCase() ?? "";
     const SHELL_NAMES = new Set(['.bashrc','.bash_profile','.bash_aliases','.zshrc','.zprofile','.profile','.fishrc','bashrc','zshrc','profile']);
     const isDockerfile = fname === 'dockerfile' || fname.startsWith('dockerfile.');
-    const ext = lang || (isDockerfile ? "dockerfile" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? ""));
+    const isEnvFile = fname === '.env' || fname.startsWith('.env.');
+    const ext = lang || (isDockerfile ? "dockerfile" : isEnvFile ? "env" : SHELL_NAMES.has(fname) ? "sh" : (path.split(".").pop()?.toLowerCase() ?? ""));
     const langExt = langMap[ext] ? await langMap[ext]() : [];
     if (disposed) return;
     const lspLanguage = lspLanguageForPath(path, ext);
@@ -325,22 +332,54 @@
       state: savedState ?? EditorState.create({ doc: value, extensions }),
       parent: container,
     });
+    // A buffer edit (search-and-replace) can land while this view is still
+    // mounting, and a restored `savedState` carries its own older doc, so
+    // reconcile against the current value before anything is shown.
+    appliedExternalEdit = externalEdit;
+    const mountedDoc = view.state.doc.toString();
+    if (mountedDoc !== value) {
+      view.dispatch({ changes: { from: 0, to: mountedDoc.length, insert: value } });
+    }
+    if (pendingReveal) {
+      const target = pendingReveal;
+      pendingReveal = null;
+      applyReveal(target);
+    }
     })();
   });
 
+  // Jump to a search-in-files hit. The editor mounts asynchronously (language
+  // modes are lazy-loaded), so a jump that lands early is queued for onMount.
   $effect(() => {
-    const trigger = searchTrigger;
-    if (!searchTriggerReady) {
-      seenSearchTrigger = trigger;
-      searchTriggerReady = true;
-      return;
-    }
-    if (trigger === seenSearchTrigger) return;
-    seenSearchTrigger = trigger;
-    if (active && view) openSearchPanel(view);
+    const target = reveal;
+    if (!target || target.path !== path || target.nonce === appliedReveal) return;
+    appliedReveal = target.nonce;
+    if (view) applyReveal(target);
+    else pendingReveal = target;
   });
 
-  onDestroy(() => { disposed = true; onsavedstate?.(view?.state); view?.destroy(); });
+  // Pull in an edit made to the buffer from outside the editor (search-and-
+  // replace). The doc is only read when the view is built, so without this the
+  // view would keep showing stale text and the next keystroke would undo the
+  // replacement. Before mount there is nothing to do — the initial state is
+  // created from the already-updated `value`.
+  $effect(() => {
+    const nonce = externalEdit;
+    if (nonce === appliedExternalEdit) return;
+    appliedExternalEdit = nonce;
+    if (!view) return;
+    const current = view.state.doc.toString();
+    if (current === value) return;
+    view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
+  });
+
+  // Report the identity pinned at init: `path` and `lang` may already hold the
+  // keyed replacement's values by the time this runs.
+  onDestroy(() => {
+    disposed = true;
+    if (view) onsavedstate?.(view.state, editorPath, editorLanguage);
+    view?.destroy();
+  });
 </script>
 
 <div class="cm-wrap" bind:this={container}></div>
@@ -357,5 +396,25 @@
     flex: 1;
     height: 100%;
     position: relative;
+  }
+  /* Float the search panel over the top-right corner instead of letting
+     CodeMirror lay it out as a full-width bar (matches .term-find). */
+  .cm-wrap :global(.cm-panels) {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: auto;
+    width: auto;
+    z-index: 30;
+    background: var(--transparent);
+    border: none;
+    color: inherit;
+  }
+  .cm-wrap :global(.cm-panels-top) {
+    border-bottom: none;
+  }
+  .cm-wrap :global(.cm-panel) {
+    background: var(--transparent);
+    padding: 0;
   }
 </style>

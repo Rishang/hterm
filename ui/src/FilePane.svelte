@@ -1,24 +1,53 @@
 <script>
   import { onDestroy } from "svelte";
   import CodeEditor, { supportedLangs } from "./CodeEditor.svelte";
+  import { callTool } from "./toolsApi.js";
   import { lspLanguageForPath, lspServerForLanguage } from "./autocomplete/lsp.js";
   import { marked } from "marked";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
-  /** @type {{ tab: import("./App.svelte").FileTab | null | undefined, active?: boolean, searchTrigger?: number, lspServers?: Record<string, string>, autosave?: { enabled: boolean, delay: number }, onFocus?: () => void, onOpenSidebar?: () => void }} */
-  let { tab, active = true, searchTrigger = 0, lspServers = {}, autosave = { enabled: true, delay: 1000 }, onFocus, onOpenSidebar } = $props();
+  /** @type {{ tab: import("./App.svelte").FileTab | null | undefined, active?: boolean, reveal?: { path: string, line: number, column: number, length: number, focus: boolean, nonce: number } | null, lspServers?: Record<string, string>, autosave?: { enabled: boolean, delay: number }, editorStateFor?: (path: string, language: string) => import("@codemirror/state").EditorState | null, onEditorState?: (state: import("@codemirror/state").EditorState | undefined, path: string, language: string) => void, onFocus?: () => void, onOpenSidebar?: () => void }} */
+  let { tab, active = true, reveal = null, lspServers = {}, autosave = { enabled: true, delay: 1000 }, editorStateFor = () => null, onEditorState = () => {}, onFocus, onOpenSidebar } = $props();
   let lspEnvironment = $state(null);
   let environmentRequest = 0;
   let autosaveTimer = null;
   let saving = false;
   let saveQueued = false;
+  let mdPreviewEl = $state(null);
+  let mermaidSeq = 0;
+
+  // ponytail: render mermaid blocks in place after marked() paints; no markdown-it plugin pipeline
+  $effect(() => {
+    const source = tab?.preview ? tab.editContent : null;
+    if (!mdPreviewEl || source == null) return;
+    const blocks = [...mdPreviewEl.querySelectorAll("pre > code.language-mermaid")];
+    if (!blocks.length) return;
+    let cancelled = false;
+    import("mermaid").then(async ({ default: mermaid }) => {
+      mermaid.initialize({ startOnLoad: false, theme: "dark", suppressErrorRendering: true });
+      for (const block of blocks) {
+        try {
+          const { svg } = await mermaid.render(`mermaid-${++mermaidSeq}`, block.textContent);
+          if (cancelled) return;
+          const host = document.createElement("div");
+          host.className = "fm-mermaid";
+          host.innerHTML = svg;
+          block.parentElement.replaceWith(host);
+        } catch {
+          // leave the code block as-is when the diagram doesn't parse
+        }
+      }
+    });
+    return () => { cancelled = true; };
+  });
 
   function fileLanguage(current) {
     const fname = current.path.split("/").pop()?.toLowerCase() ?? "";
     const shellNames = new Set([".bashrc", ".bash_profile", ".bash_aliases", ".zshrc", ".zprofile", ".profile", ".fishrc", "bashrc", "zshrc", "profile"]);
     if (current.langOverride) return current.langOverride;
     if (fname === "dockerfile" || fname.startsWith("dockerfile.")) return "dockerfile";
+    if (fname === ".env" || fname.startsWith(".env.")) return "env";
     if (shellNames.has(fname)) return "sh";
     return current.path.split(".").pop()?.toLowerCase() ?? "";
   }
@@ -80,12 +109,7 @@
     const content = current.editContent;
     current.saveStatus = "saving";
     try {
-      const response = await fetch(`${basePath}/api/tools/call`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "write_file", arguments: { path: current.path, content } }),
-      });
-      if (!response.ok) throw new Error("save failed");
+      await callTool(basePath, "write_file", { path: current.path, content });
       current.content = content;
       current.saveStatus = "saved";
       setTimeout(() => {
@@ -133,7 +157,7 @@
         <iframe class="fm-html-preview" title="HTML Preview" sandbox="" srcdoc={tab.editContent}></iframe>
       {:else}
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-        <div class="fm-md-preview">{@html marked(tab.editContent)}</div>
+        <div class="fm-md-preview" bind:this={mdPreviewEl}>{@html marked(tab.editContent)}</div>
       {/if}
     {:else}
       {#key tab.id + tab.langOverride}
@@ -141,13 +165,14 @@
           path={tab.path}
           value={tab.editContent}
           lang={tab.langOverride}
-          savedState={tab.editorState}
+          savedState={editorStateFor(tab.path, tab.langOverride)}
           {lspServers}
           onlsenvironment={(environment) => { lspEnvironment = environment; }}
           {active}
-          {searchTrigger}
+          {reveal}
+          externalEdit={tab.externalEdit ?? 0}
           onchange={onEditorChange}
-          onsavedstate={(s) => { tab.editorState = s; }}
+          onsavedstate={onEditorState}
           onsave={saveTab}
         />
       {/key}
@@ -164,7 +189,7 @@
             {tab.preview ? "Edit" : "Preview"}
           </button>
         {/if}
-        <select id="lang-select" class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.editorState = null; tab.langOverride = e.target.value; }}>
+        <select id="lang-select" class="fm-lang-select" value={tab.langOverride} onchange={(e) => { tab.langOverride = e.target.value; }}>
           <option value="">Auto</option>
           {#each supportedLangs as l (l)}
             <option value={l}>{l}</option>

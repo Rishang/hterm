@@ -12,10 +12,12 @@ use tokio::time;
 use crate::config::AppConfig;
 use crate::pty::PtySession;
 
-// ── Binary protocol constants (must match terminal.js) ────────────────────────
+// ── Binary protocol constants (must match TermTab.svelte) ─────────────────────
 const MSG_INPUT:  u8 = 0;   // client → server: keystroke data
 const MSG_OUTPUT: u8 = 1;   // server → client: PTY output
 const MSG_RESIZE: u8 = 2;   // client → server: terminal resize (cols u16 BE, rows u16 BE)
+// 3 is reserved for the error frame the browser renders inline.
+const MSG_CWD:    u8 = 4;   // server → client: shell working directory (UTF-8 path)
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +63,12 @@ pub struct AppState {
     /// points — only quick insert/remove/lookup operations.  This avoids the
     /// overhead of tokio's async lock machinery.
     pub mcp_transmitters: std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<axum::response::sse::Event>>>,
+
+    /// Active file-explorer watch sessions, mapping session id to the channel
+    /// that updates which directories that session watches. Removing an entry
+    /// closes the channel, which stops the watcher task and releases its inotify
+    /// watches. Same `std::sync::RwLock` rationale as `mcp_transmitters`.
+    pub watch_sessions: std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<Vec<String>>>>,
 
     /// Persistent language-server sessions used by the file editor. The lock is
     /// only held for synchronous pool bookkeeping, never across process I/O.
@@ -310,6 +318,14 @@ async fn pty_main_loop(
     let mut ping_ticker = time::interval(ping_interval);
     ping_ticker.tick().await; // discard the immediate first tick
 
+    // Working-directory tracking for the explorer's auto-cd. Reported once up
+    // front so a client that enables auto-cd before running anything still knows
+    // where the shell started, then only when the path actually changes.
+    let mut last_cwd = String::new();
+    if let Some(msg) = cwd_frame(&session, &mut last_cwd) {
+        if out_tx.send(msg).await.is_err() { return; }
+    }
+
     'outer: loop {
         tokio::select! {
             biased;
@@ -356,6 +372,13 @@ async fn pty_main_loop(
                     }
 
                     if flush_coalesce(&mut coalesce, &out_tx).await { break; }
+
+                    // A finished output burst is the cheapest signal that a
+                    // command completed and the prompt was redrawn — the moment
+                    // the shell's cwd can have changed.
+                    if let Some(msg) = cwd_frame(&session, &mut last_cwd) {
+                        if out_tx.send(msg).await.is_err() { break; }
+                    }
                 }
             },
 
@@ -384,6 +407,25 @@ async fn flush_coalesce(coalesce: &mut BytesMut, tx: &mpsc::Sender<Message>) -> 
         return tx.send(Message::Binary(payload)).await.is_err();
     }
     false
+}
+
+/// Build a `MSG_CWD` frame when the shell has moved to a different directory.
+///
+/// Called once per output flush — the point at which a command has finished and
+/// the prompt has been redrawn. Returns `None` when the path is unchanged, so an
+/// unchanging cwd never puts a frame on the wire, and an idle terminal (no
+/// output, no flush) does no work at all.
+fn cwd_frame(session: &PtySession, last: &mut String) -> Option<Message> {
+    let cwd = session.cwd()?;
+    if cwd == *last {
+        return None;
+    }
+
+    let mut frame = BytesMut::with_capacity(cwd.len() + 1);
+    frame.extend_from_slice(&[MSG_CWD]);
+    frame.extend_from_slice(cwd.as_bytes());
+    *last = cwd;
+    Some(Message::Binary(frame.freeze()))
 }
 
 /// Apply a `PtyCmd`. Returns `true` if the loop should exit.

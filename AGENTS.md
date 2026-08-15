@@ -6,15 +6,16 @@ Read and follow [STYLE.md](STYLE.md) before changing code. It is the single sour
 
 ## Repository navigation
 
-- `src/` is the Rust/Axum server. `src/main.rs` composes routes and process startup; feature modules own configuration, PTY/WebSocket terminal transport, REST/files/tools, MCP, and LSP.
-- `ui/` is the Svelte 5/Vite frontend. `ui/src/App.svelte` composes feature components; `ui/src/autocomplete/` holds editor/LSP adapters; `ui/src/global.css` is the global theme.
-- `openapi.yaml` is the checked-in REST/MCP contract embedded by the binary.
+- `src/` is the Rust/Axum server; start at `src/main.rs` to navigate a backend change.
+- `src/watch.rs` owns filesystem change notification for the file explorer: inotify watches over the SSE routes nested at `/api/files/watch`, so changes made outside the browser (shell commands, builds, VCS operations) are pushed instead of polled. Its browser counterpart is the watch section of `ui/src/FileManager.svelte`; change the two together.
+- `ui/` is the Svelte 5/Vite frontend; start at `ui/src/App.svelte` for cross-feature UI work.
+- `openapi.yaml` is the checked-in REST/MCP contract.
 - `Taskfile.yml` defines UI, release build, development, and cleanup automation.
 - `docs/superpowers/` contains dated feature specifications and plans; treat them as context for their specific feature.
 
 ## Execution and validation
 
-Use the narrowest relevant check after a change:
+Use the narrowest relevant check after a change. Always use the repository `Taskfile.yml` through `task` targets for builds; do not invoke `pnpm build` or `cargo build` directly.
 
 - Frontend: `task ui` (build) and `cd ui && pnpm run lint` (lint).
 - Rust: `cargo test` for the crate’s inline tests; use `cargo fmt --check` when the local toolchain provides it.
@@ -26,7 +27,7 @@ Use the narrowest relevant check after a change:
 
 ## Change workflow
 
-1. Locate the boundary that owns the behavior before editing; prefer existing shared primitives and extension maps over parallel implementations.
+1. Locate the boundary that owns the behavior before editing.
 2. Keep backend, browser, and API contract changes consistent when a public route, tool, or wire payload changes.
-3. Do not edit generated/ignored build outputs (`target/`, `ui/dist/`, `ui/node_modules/`, `.task/`).
+3. Do not edit generated/ignored build outputs.
 4. Review `git diff` and report the validation actually run, including any unavailable checks.

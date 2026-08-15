@@ -77,7 +77,6 @@ paths:
                   fontFamily: "'JetBrains Mono', monospace"
                   fontSize: 14
                 writable: true
-                sixel: false
                 url_arg: false
 
   /api/exec:
@@ -246,6 +245,9 @@ paths:
         - `0x00`: Input (client → server, keystroke data)
         - `0x01`: Output (server → client, PTY output)
         - `0x02`: Resize (client → server, cols u16 BE, rows u16 BE)
+        - `0x04`: Current working directory (server → client, UTF-8 absolute path).
+          Sent when available after the session starts and after output flushes only
+          when the shell directory changes; clients must treat it as a control frame.
 
         **Query Parameters** (if `url_arg` enabled):
         - `arg`: Repeated parameter for shell arguments (e.g., `?arg=-c&arg=ls`)
@@ -530,6 +532,185 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/files/watch:
+    get:
+      summary: Stream filesystem change events
+      description: |
+        Open a Server-Sent Events stream of filesystem change notifications for
+        the file explorer, so changes made outside the browser (a shell command
+        in a terminal session, a build, a VCS checkout) are reported without
+        polling.
+
+        The first event is `endpoint` and carries the URL to POST the watched
+        directory set to. Subsequent `change` events carry
+        `{ "dirs": [...] }` — the watched directories whose contents changed,
+        coalesced over a short window. Re-list those directories to refresh.
+
+        Watches are non-recursive and bounded to 512 active directories per
+        session and 32 sessions total; closing a stream releases its watches.
+        The session-specific endpoint
+        is valid only while its SSE stream remains connected. Requires Linux
+        inotify.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      responses:
+        '200':
+          description: Event stream opened
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                event: endpoint
+                data: /api/files/watch?sessionId=8f14e45f-ea6d-4a1f-9f2c-1b0d7c3a5e91
+
+                event: change
+                data: {"dirs":["/home/user/projects/app/src"]}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Filesystem watching is unavailable or at its session limit
+    post:
+      summary: Set the directories a watch session monitors
+      description: |
+        Replace the set of directories the session identified by `sessionId`
+        monitors. Send the directories currently visible in the explorer; paths
+        must be absolute. The server silently ignores paths it cannot watch
+        (including missing or non-directory paths) and paths beyond the 512-watch
+        per-session cap; a successful update still returns `204`.
+      tags:
+        - terminal
+      parameters:
+        - name: sessionId
+          in: query
+          required: true
+          description: Session id received from the stream's `endpoint` event.
+          schema:
+            type: string
+            format: uuid
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WatchDirsRequest'
+            example:
+              paths:
+                - "/home/user/projects/app"
+                - "/home/user/projects/app/src"
+      responses:
+        '204':
+          description: Watch set updated
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Unknown session id
+        '410':
+          description: Session is no longer active
+
+  /api/lsp/completion:
+    post:
+      summary: Request language-server completions
+      description: |
+        Request completions for an absolute file path and its current document
+        content. The response contains at most 200 items. When `isIncomplete`
+        is true, re-query as the prefix changes instead of locally filtering the
+        returned subset. Document content is limited to 2,097,152 UTF-8 bytes.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LspDocumentRequest'
+      responses:
+        '200':
+          description: Completion results; an empty result is returned when no language server is available.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LspCompletionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: Document content exceeds 2,097,152 UTF-8 bytes
+        '503':
+          description: Too many language-server document requests are in progress
+
+  /api/lsp/hover:
+    post:
+      summary: Request language-server hover information
+      description: |
+        Request hover information for an absolute file path and its current
+        document content. Invalid paths, unavailable language servers, and
+        document content over 2,097,152 UTF-8 bytes return JSON `null`.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LspDocumentRequest'
+      responses:
+        '200':
+          description: Hover result or JSON null when unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LspHoverResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Too many language-server document requests are in progress
+
+  /api/lsp/environment:
+    get:
+      summary: Get the language-server environment for a file
+      description: |
+        Returns the global environment or the nearest Python virtual environment
+        selected for the requested absolute path.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Absolute file path
+          schema:
+            type: string
+        - name: language
+          in: query
+          required: true
+          description: Editor language identifier
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Selected language-server environment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LspEnvironment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /api/files/{path}:
     patch:
       summary: Rename or move a file or directory
@@ -654,14 +835,11 @@ components:
       properties:
         theme:
           type: object
-          description: xterm.js theme configuration
+          description: Ghostty Web terminal theme configuration
           additionalProperties: true
         writable:
           type: boolean
           description: Whether terminal is writable
-        sixel:
-          type: boolean
-          description: Sixel graphics support enabled
         url_arg:
           type: boolean
           description: Allow URL query arguments
@@ -760,6 +938,108 @@ components:
           type: string
           description: Absolute destination path
           example: "/home/user/projects/source-copy"
+
+    WatchDirsRequest:
+      type: object
+      required:
+        - paths
+      properties:
+        paths:
+          type: array
+          description: |
+            Absolute directory paths to monitor. Replaces the session's previous
+            set. Watches are non-recursive, so nested directories must be listed
+            individually. At most 512 active directories are watched per session;
+            missing, non-directory, and excess paths are silently ignored.
+          items:
+            type: string
+          example:
+            - "/home/user/projects/app"
+            - "/home/user/projects/app/src"
+
+    LspDocumentRequest:
+      type: object
+      required:
+        - path
+        - language
+        - content
+        - position
+      properties:
+        path:
+          type: string
+          description: Absolute document path
+        language:
+          type: string
+          description: Editor language identifier used to choose a language server
+        server:
+          type: string
+          description: Optional supported language-server executable selection
+        content:
+          type: string
+          description: Complete document text; completion requests allow at most 2,097,152 UTF-8 bytes
+        position:
+          type: object
+          required:
+            - line
+            - character
+          properties:
+            line:
+              type: integer
+              format: int32
+              minimum: 0
+            character:
+              type: integer
+              format: int32
+              minimum: 0
+
+    LspEnvironment:
+      type: object
+      required:
+        - kind
+        - name
+      properties:
+        kind:
+          type: string
+          enum: [global, venv]
+        name:
+          type: string
+        path:
+          type: string
+          nullable: true
+          description: Virtual-environment root; null for the global environment
+
+    LspCompletionResponse:
+      type: object
+      required:
+        - items
+        - isIncomplete
+      properties:
+        items:
+          type: array
+          description: Language Server Protocol completion items, capped at 200 entries
+          items:
+            type: object
+            additionalProperties: true
+        isIncomplete:
+          type: boolean
+          description: True when the server or hterm's 200-item cap returned a partial result
+        environment:
+          $ref: '#/components/schemas/LspEnvironment'
+
+    LspHoverResponse:
+      nullable: true
+      oneOf:
+        - type: object
+          required:
+            - result
+            - environment
+          properties:
+            result:
+              nullable: true
+              description: Language Server Protocol hover result
+              additionalProperties: true
+            environment:
+              $ref: '#/components/schemas/LspEnvironment'
 
     ToolsList:
       type: object

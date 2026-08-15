@@ -1,3 +1,5 @@
+import { callTool } from "./toolsApi.js";
+
 /**
  * Parse the bash-tool response text into a clean list of file paths.
  * The bash tool prepends `set -x`, whose trace lands in stderr and is appended
@@ -27,17 +29,5 @@ export async function fetchFileList(basePath) {
   const command =
     "root=\"$(pwd)\"; rg --files \"$root\" 2>/dev/null || fd -t f . \"$root\" 2>/dev/null || " +
     "find \"$root\" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/target/*'";
-  const res = await fetch(`${basePath}/api/tools/call`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "bash", arguments: { command } }),
-  });
-  if (!res.ok) throw new Error(`File list request failed: ${res.status}`);
-  const data = await res.json();
-  if (data?.isError) {
-    const msg = data?.content?.[0]?.text || "file list command failed";
-    throw new Error(msg);
-  }
-  const text = data?.content?.[0]?.text ?? "";
-  return parseFileList(text);
+  return parseFileList(await callTool(basePath, "bash", { command }));
 }

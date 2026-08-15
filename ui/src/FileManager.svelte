@@ -1,8 +1,10 @@
 <script>
-  import { fileIcon } from './fileIcon.js';
+  import { onDestroy } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
+  import { fileIcon } from "./fileIcon.js";
 
-  /** @type {{ fileTabs: any[], activeTab: string, openFileByPath: Function, visible?: boolean }} */
-  let { fileTabs, activeTab, openFileByPath, visible = true } = $props();
+  /** @type {{ activeTab: string, openFileByPath: Function, visible?: boolean, autoCd?: boolean, terminalCwd?: string, root?: string }} */
+  let { activeTab, openFileByPath, visible = true, autoCd = true, terminalCwd = "", root = $bindable("/") } = $props();
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
   const SIDEBAR_ROOT_STORAGE_KEY = "hterm:file-manager-root";
@@ -17,10 +19,9 @@
 
   /** @type {TreeNode[]} */
   let tree = $state([]);
-  let root = $state("/");
   let error = $state("");
   /** @type {Map<string, Promise<TreeNode[]>>} */
-  const dirLoadPromises = new Map();
+  const dirLoadPromises = new SvelteMap();
 
   /** @param {TreeNode} a @param {TreeNode} b */
   function sortTreeNodes(a, b) {
@@ -98,7 +99,9 @@
   }
 
   async function refreshDirs(paths, force = false) {
-    await Promise.all([...new Set(paths)].map(path => refreshDir(path, force)));
+    const results = await Promise.allSettled([...new Set(paths)].map(path => refreshDir(path, force)));
+    const failed = results.find(result => result.status === "rejected");
+    if (failed) error = String(failed.reason);
   }
 
   /** @param {TreeNode} node */
@@ -124,12 +127,36 @@
   let committing = false;
 
   function saveRootPath(path) {
-    try { localStorage.setItem(SIDEBAR_ROOT_STORAGE_KEY, path); } catch {}
+    try { localStorage.setItem(SIDEBAR_ROOT_STORAGE_KEY, path); } catch { /* storage unavailable */ }
   }
 
   function savedRootPath() {
     try { return localStorage.getItem(SIDEBAR_ROOT_STORAGE_KEY) || ""; } catch { return ""; }
   }
+
+  // ── Auto-cd ────────────────────────────────────────────────────────────────
+  // `terminalCwd` is the working directory of the terminal tab currently on
+  // screen, pushed by the server only when that shell's directory changes.
+  // Switching terminal tabs therefore re-points the tree at that shell.
+  let autoCdApplied = false;
+  let previousAutoCd = $state();
+
+  $effect(() => {
+    const wasAutoCd = previousAutoCd;
+    previousAutoCd = autoCd;
+    if (wasAutoCd && !autoCd) {
+      const saved = savedRootPath();
+      autoCdApplied = false;
+      if (saved && saved !== root) {
+        root = saved;
+        loadRoot();
+      }
+    }
+    if (!autoCd || !terminalCwd || terminalCwd === root) return;
+    autoCdApplied = true;
+    root = terminalCwd;
+    loadRoot();
+  });
 
   function commitPath() {
     committing = true;
@@ -370,23 +397,117 @@
 
   function onDocClick() { if (ctxMenu) closeCtx(); }
 
-  async function initializeRoot() {
-    try {
-      const savedRoot = savedRootPath();
-      if (savedRoot) {
-        root = savedRoot;
-      } else {
-        const res = await fetch(`${basePath}/api/config`);
-        if (res.ok) { const cfg = await res.json(); if (cfg.cwd) root = cfg.cwd; }
+  // ── External change watching ───────────────────────────────────────────────
+  // The server watches these directories with inotify and pushes the paths that
+  // changed, so edits made outside this pane — `rm`/`mv`/`touch` in a terminal
+  // tab, a build, a git checkout — show up without the tree ever polling.
+  const WATCH_SYNC_DEBOUNCE_MS = 200;
+
+  /** @type {EventSource|null} */
+  let watchSource = null;
+  /** POST target for the watched-directory set; supplied by the stream's `endpoint` event. */
+  let watchEndpoint = "";
+  let sentWatchDirs = "";
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let watchSyncTimer = null;
+
+  /**
+   * Directories whose contents are on screen: the root plus every expanded,
+   * loaded folder. Collapsed subtrees are omitted so the server holds one kernel
+   * watch per visible directory instead of one per directory in the project.
+   * @param {TreeNode[]} nodes @param {string[]} acc @returns {string[]}
+   */
+  function visibleDirs(nodes = tree, acc = [root]) {
+    for (const node of nodes) {
+      if (node.is_dir && node.open && node.loaded) {
+        acc.push(node.path);
+        visibleDirs(node.children, acc);
       }
-    } catch {}
-    loadRoot();
+    }
+    return acc;
+  }
+
+  async function syncWatchedDirs() {
+    if (!watchEndpoint) return;
+    const body = JSON.stringify({ paths: [...new Set(visibleDirs())] });
+    if (body === sentWatchDirs) return;
+    sentWatchDirs = body;
+    try {
+      const res = await fetch(watchEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      // A stale session (server restart) needs a resend once the stream reopens.
+      if (!res.ok) { sentWatchDirs = ""; watchEndpoint = ""; }
+    } catch { sentWatchDirs = ""; }
+  }
+
+  function stopWatching() {
+    if (watchSyncTimer) clearTimeout(watchSyncTimer);
+    watchSyncTimer = null;
+    watchSource?.close();
+    watchSource = null;
+    watchEndpoint = "";
+    sentWatchDirs = "";
+  }
+
+  function startWatching() {
+    if (!visible || watchSource) return;
+    const source = new EventSource(`${basePath}/api/files/watch`);
+    watchSource = source;
+    source.addEventListener("endpoint", (e) => {
+      if (watchSource !== source || !visible) return;
+      // Browsers reconnect a dropped stream on their own, which yields a fresh
+      // session id — the watch set has to be re-declared against it.
+      watchEndpoint = e.data;
+      sentWatchDirs = "";
+      void syncWatchedDirs();
+    });
+    source.addEventListener("change", (e) => {
+      try {
+        const { dirs } = JSON.parse(e.data);
+        if (Array.isArray(dirs) && dirs.length) void refreshDirs(dirs, true);
+      } catch { /* malformed payload — nothing to refresh */ }
+    });
+    source.addEventListener("error", () => { watchEndpoint = ""; });
+  }
+
+  // Re-declare the watch set when folders open or close, or the root changes.
+  $effect(() => {
+    visibleDirs();
+    if (!visible) {
+      stopWatching();
+      return;
+    }
+    if (initialized) startWatching();
+    if (watchSyncTimer) clearTimeout(watchSyncTimer);
+    watchSyncTimer = setTimeout(syncWatchedDirs, WATCH_SYNC_DEBOUNCE_MS);
+  });
+
+  onDestroy(stopWatching);
+
+  async function initializeRoot() {
+    let initialRoot = savedRootPath();
+    if (!initialRoot) {
+      try {
+        const res = await fetch(`${basePath}/api/config`);
+        if (res.ok) { const cfg = await res.json(); if (cfg.cwd) initialRoot = cfg.cwd; }
+      } catch { /* fall back to the current root */ }
+    }
+    // A terminal may have reported its directory while the config request was in
+    // flight; a live shell outranks the remembered root.
+    if (!autoCdApplied) {
+      if (initialRoot) root = initialRoot;
+      loadRoot();
+    }
+    if (visible) startWatching();
   }
 
   $effect(() => {
     if (!visible || initialized) return;
     initialized = true;
-    initializeRoot();
+    void initializeRoot();
   });
 </script>
 
@@ -557,7 +678,7 @@
     {/if}
 
     <!-- Indent guide lines -->
-    {#each { length: depth } as _, i}
+    {#each Array.from({ length: depth }, (_, i) => i) as i (i)}
       <span class="fm-indent-guide" style:left="{i * 16 + 12}px"></span>
     {/each}
 

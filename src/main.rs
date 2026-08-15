@@ -4,6 +4,7 @@ mod mcp;
 mod pty;
 mod rest;
 mod tools;
+mod watch;
 mod ws;
 
 use axum::http::{HeaderMap, StatusCode};
@@ -146,12 +147,6 @@ struct Cli {
     #[arg(short = 'K', long = "ssl-key")]
     ssl_key: Option<String>,
 
-    // ── Terminal features ─────────────────────────────────────────────────────
-
-    /// Enable Sixel graphics support in the xterm.js frontend
-    #[arg(long = "sixel")]
-    sixel: bool,
-
     // ── Misc ──────────────────────────────────────────────────────────────────
 
     /// Enable debug-level logging
@@ -221,7 +216,6 @@ async fn main() {
     if cli.ssl                         { cfg.ssl           = true; }
     if let Some(c) = cli.ssl_cert      { cfg.ssl_cert      = c; }
     if let Some(k) = cli.ssl_key       { cfg.ssl_key       = k; }
-    if cli.sixel                       { cfg.sixel         = true; }
 
     // ── Validation ────────────────────────────────────────────────────────────
     if !Path::new(&cfg.shell).exists() {
@@ -261,7 +255,6 @@ async fn main() {
         serde_json::to_string(&ConfigResponse {
             theme:    cfg.theme.clone(),
             writable: cfg.writable,
-            sixel:    cfg.sixel,
             url_arg:  cfg.url_arg,
             cwd:      if cfg.cwd.is_empty() {
                 std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "/".to_string())
@@ -314,6 +307,7 @@ async fn main() {
         expected_auth,
         custom_index,
         mcp_transmitters: std::sync::RwLock::new(std::collections::HashMap::new()),
+        watch_sessions: std::sync::RwLock::new(std::collections::HashMap::new()),
         lsp:            std::sync::Mutex::new(lsp::LspManager::default()),
     });
 
@@ -472,12 +466,14 @@ async fn serve_tcp(
     // ── Serve plain or TLS from the pre-bound std listener ───────────────────
     if let Some(tls) = tls_config {
         axum_server::from_tcp_rustls(std_listener, tls)
+            .unwrap()
             .handle(handle)
             .serve(app.into_make_service())
             .await
             .unwrap();
     } else {
         axum_server::from_tcp(std_listener)
+            .unwrap()
             .handle(handle)
             .serve(app.into_make_service())
             .await
@@ -491,7 +487,11 @@ async fn serve_tcp(
 
 async fn serve_index(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if !tools::check_auth(&state, &headers) {
+        return tools::unauthorized(&state.config);
+    }
     if let Some(content) = state.custom_index {
         axum::response::Html(content).into_response()
     } else {

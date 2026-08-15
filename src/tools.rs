@@ -123,6 +123,25 @@ pub fn check_auth(state: &AppState, headers: &HeaderMap) -> bool {
     }
 }
 
+/// 401 response for a failed [`check_auth`] check.
+///
+/// Includes a `WWW-Authenticate` header only in `--credential` (Basic Auth)
+/// mode, so the browser's native login prompt appears on the first page
+/// load. Omitted for `--auth-header` (reverse-proxy) mode, since that
+/// credential is injected by the upstream proxy, not typed by a user.
+pub fn unauthorized(cfg: &AppConfig) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if cfg.auth_header.is_empty() && !cfg.credential.is_empty() {
+        (
+            axum::http::StatusCode::UNAUTHORIZED,
+            [(axum::http::header::WWW_AUTHENTICATE, r#"Basic realm="hterm""#)],
+        )
+            .into_response()
+    } else {
+        axum::http::StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
 /// Call a tool by name with arguments directly (no "arguments" wrapper needed)
 pub async fn call_tool(name: &str, arguments: &Value, cfg: &AppConfig) -> Result<Value, String> {
     match name {

@@ -33,10 +33,15 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 - Built with Rust for memory safety
 
 ### 🎨 **Modern Terminal**
-- Full xterm.js integration
+- Full Ghostty Web terminal integration
 - Custom themes & fonts
-- Sixel graphics support
 - Real-time resize handling
+
+### 🗂️ **Workspace & Editor**
+- File explorer that follows the active terminal directory
+- Live filesystem updates through Linux inotify
+- CodeMirror editor with configurable language servers
+- Search across the explorer root (`Ctrl/Cmd+Shift+F`)
 
 </td>
 <td width="50%">
@@ -203,7 +208,10 @@ Routes are organized into clear namespaces for better discoverability and mainte
 ├── GET  /api/config        → Terminal configuration
 ├── POST /api/exec          → Direct command execution
 ├── GET  /api/tools         → List available tools
-└── POST /api/tools/call    → Execute a tool
+├── POST /api/tools/call    → Execute a tool
+├── /api/files/*            → File explorer and filesystem operations
+├── GET/POST /api/files/watch → Filesystem-change SSE stream and watch set
+└── /api/lsp/*              → Language-server completion, hover, and environment
 
 📁 /ws (WebSocket)
 └── GET  /ws                → Terminal WebSocket upgrade
@@ -263,17 +271,36 @@ docker run -p 8080:8080 \
 | `POST` | `/api/exec` | Execute shell command directly |
 | `GET` | `/api/tools` | List available MCP tools |
 | `POST` | `/api/tools/call` | Execute MCP tool via REST |
+| `GET` / `POST` | `/api/files` | List or create files and directories |
+| `GET` | `/api/files/read` | Read a file for the editor |
+| `POST` | `/api/files/copy` | Copy a file or directory |
+| `PATCH` / `DELETE` | `/api/files/{path}` | Rename, move, or delete a file or directory |
+| `GET` | `/api/files/watch` | Open an SSE filesystem-change stream (Linux inotify) |
+| `POST` | `/api/files/watch?sessionId={uuid}` | Replace a watch session's directories |
+| `POST` | `/api/lsp/completion` | Request language-server completions |
+| `POST` | `/api/lsp/hover` | Request language-server hover information |
+| `GET` | `/api/lsp/environment` | Get the selected language-server environment |
 
 #### **WebSocket**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/ws` | WebSocket upgrade for terminal I/O |
 
+WebSocket binary frames begin with a type byte: `0x00` input (client → server),
+`0x01` PTY output (server → client), `0x02` resize (client → server; big-endian
+u16 columns and rows), and `0x04` shell working directory (server → client;
+UTF-8 absolute path). Treat `0x04` as a control frame, not terminal output.
+
 #### **MCP Protocol** (`/mcp/*`)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/mcp/sse` | Server-Sent Events endpoint |
 | `POST` | `/mcp/message` | JSON-RPC 2.0 message handler |
+
+The filesystem watch stream first emits an `endpoint` event with the
+session-specific POST URL; later `change` events carry `{"dirs":["/absolute/path"]}`.
+Watches are non-recursive, require Linux inotify, and are capped at 512 active
+directories per session and 32 sessions total.
 
 ### 💡 **Quick Examples**
 
@@ -447,7 +474,6 @@ OPTIONS:
     -K, --ssl-key <PATH>           TLS private key (PEM)
 
     # Features
-    --sixel                        Enable Sixel graphics
     -d, --debug                    Debug logging
 
     # Configuration
@@ -490,7 +516,7 @@ Create `config.json` for persistent settings:
 - 🦀 **Rust** - Memory safety & performance
 - 🌐 **Axum** - Modern web framework
 - ⚡ **Tokio** - Async runtime
-- 🖥️ **xterm.js** - Terminal emulator
+- 🖥️ **Ghostty Web** - Terminal emulator
 - 📡 **WebSocket** - Real-time communication
 - 🎯 **MCP** - AI tool protocol
 
@@ -535,7 +561,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Inspired by [ttyd](https://github.com/tsl0922/ttyd)
 - Built with [Rust](https://www.rust-lang.org/) and [Axum](https://github.com/tokio-rs/axum)
-- Terminal powered by [xterm.js](https://xtermjs.org/)
+- Terminal powered by [Ghostty Web](https://github.com/coder/ghostty-web/)
 - MCP protocol by [Anthropic](https://modelcontextprotocol.io/)
 
 ---

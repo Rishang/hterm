@@ -1,7 +1,8 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Query, Request, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -29,6 +30,9 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(3);
 const PYTHON_FALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_DOCUMENT_SIZE: usize = 2 * 1024 * 1024;
+// JSON-escaping a document can nearly double it (every newline becomes `\n`), and
+// axum's 2 MiB default would reject the request before MAX_DOCUMENT_SIZE applied.
+const MAX_REQUEST_BODY_SIZE: usize = 2 * MAX_DOCUMENT_SIZE + 16 * 1024;
 const MAX_LSP_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 const MAX_LSP_HEADER_SIZE: usize = 8 * 1024;
 const MAX_COMPLETION_ITEMS: usize = 200;
@@ -39,6 +43,12 @@ const UNAVAILABLE_RETRY: Duration = Duration::from_secs(15);
 const MAX_JEDI_PROCESSES: usize = 4;
 static JEDI_PROCESSES: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(MAX_JEDI_PROCESSES);
+// Each in-flight request pins a copy of the document plus the server's reply, so
+// the ceiling on concurrency is also the ceiling on transient memory. Past it,
+// requests fall back to local completion rather than queueing behind a keystroke.
+const MAX_INFLIGHT_REQUESTS: usize = 8;
+static INFLIGHT_REQUESTS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_INFLIGHT_REQUESTS);
 
 // Ty currently returns `null` for some third-party `from module import Name`
 // completions. Jedi supplies those import symbols without replacing Ty's LSP.
@@ -60,22 +70,81 @@ print(json.dumps([
 
 type ServerCommand = (&'static str, &'static [&'static str]);
 
-const RUST: &[ServerCommand] = &[("rust-analyzer", &[])];
-const GO: &[ServerCommand] = &[("gopls", &[])];
-const PYTHON: &[ServerCommand] = &[("ty", &["server"]), ("pyright-langserver", &["--stdio"]), ("pylsp", &[])];
-const TYPESCRIPT: &[ServerCommand] = &[("typescript-language-server", &["--stdio"])];
-const CPP: &[ServerCommand] = &[("clangd", &[])];
-const JSON: &[ServerCommand] = &[("vscode-json-language-server", &["--stdio"])];
-const HTML: &[ServerCommand] = &[("vscode-html-language-server", &["--stdio"])];
-const CSS: &[ServerCommand] = &[("vscode-css-language-server", &["--stdio"])];
-const YAML: &[ServerCommand] = &[("yaml-language-server", &["--stdio"])];
-const KUBERNETES: &[ServerCommand] = &[("yaml-language-server", &["--stdio"])];
-const DOCKER: &[ServerCommand] = &[("docker-langserver", &["--stdio"])];
-const HELM: &[ServerCommand] = &[("helm_ls", &["serve"])];
-const TOML: &[ServerCommand] = &[("taplo", &["lsp", "stdio"])];
-const SHELL: &[ServerCommand] = &[("bash-language-server", &["start"])];
-const LUA: &[ServerCommand] = &[("lua-language-server", &[])];
-const TERRAFORM: &[ServerCommand] = &[("terraform-ls", &["serve"])];
+/// Language ID to its candidate servers, most preferred first.
+const SERVERS: &[(&str, &[ServerCommand])] = &[
+    ("rust", &[("rust-analyzer", &[])]),
+    ("go", &[("gopls", &[])]),
+    ("python", &[("ty", &["server"]), ("pyright-langserver", &["--stdio"]), ("pylsp", &[])]),
+    ("typescript", &[("typescript-language-server", &["--stdio"])]),
+    ("cpp", &[("clangd", &[])]),
+    ("json", &[("vscode-json-language-server", &["--stdio"])]),
+    ("html", &[("vscode-html-language-server", &["--stdio"])]),
+    ("css", &[("vscode-css-language-server", &["--stdio"])]),
+    ("yaml", &[("yaml-language-server", &["--stdio"])]),
+    ("kubernetes", &[("yaml-language-server", &["--stdio"])]),
+    ("dockerfile", &[("docker-langserver", &["--stdio"])]),
+    ("helm", &[("helm_ls", &["serve"])]),
+    ("toml", &[("taplo", &["lsp", "stdio"])]),
+    ("shellscript", &[("bash-language-server", &["start"])]),
+    ("lua", &[("lua-language-server", &[])]),
+    ("terraform", &[("terraform-ls", &["serve"])]),
+];
+
+/// Separates a session that is still usable — a slow reply, or an error response
+/// such as `ContentModified` — from one that must be torn down and restarted.
+#[derive(Debug)]
+enum LspError {
+    Transient(String),
+    Fatal(String),
+}
+
+impl LspError {
+    fn is_fatal(&self) -> bool {
+        matches!(self, Self::Fatal(_))
+    }
+}
+
+impl From<String> for LspError {
+    fn from(error: String) -> Self {
+        Self::Fatal(error)
+    }
+}
+
+impl From<&str> for LspError {
+    fn from(error: &str) -> Self {
+        Self::Fatal(error.to_string())
+    }
+}
+
+impl std::fmt::Display for LspError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Transient(error) | Self::Fatal(error)) = self;
+        formatter.write_str(error)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Operation {
+    Completion,
+    Hover,
+}
+
+impl Operation {
+    fn method(self) -> &'static str {
+        match self {
+            Self::Completion => "textDocument/completion",
+            Self::Hover => "textDocument/hover",
+        }
+    }
+
+    /// Extra `params` members merged over the shared document/position pair.
+    fn extra_params(self) -> Value {
+        match self {
+            Self::Completion => json!({ "context": { "triggerKind": 1 } }),
+            Self::Hover => Value::Null,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,10 +261,22 @@ pub struct LspManager {
 }
 
 pub fn router() -> Router<std::sync::Arc<AppState>> {
-    Router::new()
+    let document_routes = Router::new()
         .route("/completion", post(completion_handler))
         .route("/hover", post(hover_handler))
+        .route_layer(middleware::from_fn(limit_document_requests));
+    Router::new()
+        .merge(document_routes)
         .route("/environment", get(environment_handler))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_REQUEST_BODY_SIZE))
+}
+
+/// Shed excess document requests before Axum buffers and deserializes their bodies.
+async fn limit_document_requests(request: Request, next: Next) -> Response {
+    let Ok(_permit) = INFLIGHT_REQUESTS.try_acquire() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    next.run(request).await
 }
 
 #[derive(Deserialize)]
@@ -218,6 +299,36 @@ async fn environment_handler(
     Json(environment).into_response()
 }
 
+/// Run one document request, replacing the session only when it is truly broken.
+/// Missing servers and protocol failures must never disable local completion.
+async fn dispatch(
+    state: &AppState,
+    request: &CompletionRequest,
+    operation: Operation,
+) -> Option<(Value, LspEnvironment)> {
+    let (session, context) = match session_for(state, request).await {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::debug!(%error, method = operation.method(), "LSP request unavailable");
+            return None;
+        }
+    };
+    let result = {
+        let mut session = session.lock().await;
+        session.document_request(operation, &context, request).await
+    };
+    match result {
+        Ok(result) => Some((result, context.environment)),
+        Err(error) => {
+            if error.is_fatal() {
+                manager(state).discard(&context.key, &session);
+            }
+            tracing::debug!(%error, method = operation.method(), "LSP request unavailable");
+            None
+        }
+    }
+}
+
 async fn completion_handler(
     State(state): State<std::sync::Arc<AppState>>,
     headers: HeaderMap,
@@ -229,43 +340,20 @@ async fn completion_handler(
     if request.content.len() > MAX_DOCUMENT_SIZE {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
-
-    let path = PathBuf::from(&request.path);
-    if !path.is_absolute() {
-        return Json(json!([])).into_response();
+    let empty = || Json(json!({ "items": [], "isIncomplete": false })).into_response();
+    if !Path::new(&request.path).is_absolute() {
+        return empty();
     }
 
-    let use_jedi = language_id(&request.language, Path::new(&request.path)) == Some("python")
-        && request.server.as_deref().is_none_or(|server| server == "ty")
-        && is_python_import_completion(&request);
-    match session_for(&state, &request).await {
-        Ok((session, context)) => {
-            let result = {
-                let mut session = session.lock().await;
-                session.completion(&context, &request).await
-            };
-            match result {
-                Ok(result) => {
-                    let items = if result.is_null() && use_jedi {
-                        python_import_completions(&request, &context.environment).await.unwrap_or_else(|_| json!([]))
-                    } else {
-                        completion_items(result)
-                    };
-                    Json(json!({ "items": items, "environment": context.environment })).into_response()
-                }
-                Err(error) => {
-                    discard_session(&state, &context.key, &session).await;
-                    tracing::debug!(%error, "LSP completion unavailable");
-                    Json(json!({ "items": [] })).into_response()
-                }
-            }
-        }
-        Err(error) => {
-            // Missing servers and protocol failures should not disable local completion.
-            tracing::debug!(%error, "LSP completion unavailable");
-            Json(json!({ "items": [] })).into_response()
-        }
-    }
+    let Some((result, environment)) = dispatch(&state, &request, Operation::Completion).await else {
+        return empty();
+    };
+    let (items, incomplete) = if result.is_null() && use_jedi(&request) {
+        python_import_completions(&request, &environment).await.unwrap_or((json!([]), false))
+    } else {
+        completion_items(result)
+    };
+    Json(json!({ "items": items, "isIncomplete": incomplete, "environment": environment })).into_response()
 }
 
 async fn hover_handler(
@@ -280,56 +368,62 @@ async fn hover_handler(
         return Json(Value::Null).into_response();
     }
 
-    match session_for(&state, &request).await {
-        Ok((session, context)) => {
-            let result = {
-                let mut session = session.lock().await;
-                session.hover(&context, &request).await
-            };
-            match result {
-                Ok(result) => Json(json!({ "result": result, "environment": context.environment })).into_response(),
-                Err(error) => {
-                    discard_session(&state, &context.key, &session).await;
-                    tracing::debug!(%error, "LSP hover unavailable");
-                    Json(Value::Null).into_response()
-                }
-            }
+    match dispatch(&state, &request, Operation::Hover).await {
+        Some((result, environment)) => {
+            Json(json!({ "result": result, "environment": environment })).into_response()
         }
-        Err(error) => {
-            tracing::debug!(%error, "LSP hover unavailable");
-            Json(Value::Null).into_response()
-        }
+        None => Json(Value::Null).into_response(),
     }
+}
+
+/// Ty returns `null` for some third-party import completions; Jedi fills only that gap.
+fn use_jedi(request: &CompletionRequest) -> bool {
+    language_id(&request.language, Path::new(&request.path)) == Some("python")
+        && request.server.as_deref().is_none_or(|server| server == "ty")
+        && is_python_import_completion(request)
 }
 
 struct RequestContext {
     path: PathBuf,
     language: &'static str,
-    workspace: PathBuf,
     environment: LspEnvironment,
     server: ServerCommand,
     key: SessionKey,
+}
+
+impl RequestContext {
+    /// The workspace lives in the session key; keeping a second copy per request
+    /// only invited the two to disagree.
+    fn workspace(&self) -> &Path {
+        &self.key.workspace
+    }
 }
 
 fn request_context(request: &CompletionRequest) -> Result<RequestContext, String> {
     let path = std::fs::canonicalize(&request.path).map_err(|error| error.to_string())?;
     let language = language_id(&request.language, &path).ok_or("unsupported language")?;
     let server = server_command(language, request.server.as_deref()).ok_or("unsupported language server")?;
+    // Marker discovery keys off the source language ("helm", "kubernetes"); the
+    // protocol ID sent to the server is the mapped one.
     let workspace = workspace_root(language, &path);
     let environment = environment_for(language, &path);
+    let language = document_language_id(language);
     Ok(RequestContext {
-        path,
-        language: document_language_id(language),
-        workspace: workspace.clone(),
-        environment: environment.clone(),
-        server,
         key: SessionKey {
-            language: document_language_id(language),
+            language,
             server: server.0,
             workspace,
             environment: environment.root().map(Path::to_path_buf),
         },
+        path,
+        language,
+        environment,
+        server,
     })
+}
+
+fn manager(state: &AppState) -> std::sync::MutexGuard<'_, LspManager> {
+    state.lsp.lock().expect("LSP manager mutex poisoned")
 }
 
 async fn session_for(
@@ -337,52 +431,33 @@ async fn session_for(
     request: &CompletionRequest,
 ) -> Result<(Arc<AsyncMutex<LspSession>>, RequestContext), String> {
     let context = request_context(request)?;
-    let slot = state.lsp.lock().expect("LSP manager mutex poisoned").checkout(&context.key)?;
+    let slot = manager(state).checkout(&context.key)?;
     let session = slot.get_or_try_init(|| async {
-        LspSession::start(
-            context.server,
-            &context.workspace,
-            &context.environment,
-            &state.config,
-        )
+        LspSession::start(context.server, context.workspace(), &context.environment, &state.config)
             .await
             .map(|session| Arc::new(AsyncMutex::new(session)))
     }).await.map_err(|error| error.to_string());
     match session {
         Ok(session) => Ok((session.clone(), context)),
         Err(error) => {
-            state
-                .lsp
-                .lock()
-                .expect("LSP manager mutex poisoned")
-                .mark_unavailable(&context.key, &slot);
+            manager(state).mark_unavailable(&context.key, &slot);
             Err(error)
         }
     }
 }
 
-async fn discard_session(
-    state: &AppState,
-    key: &SessionKey,
-    session: &Arc<AsyncMutex<LspSession>>,
-) {
-    state.lsp.lock().expect("LSP manager mutex poisoned").discard(key, session);
-}
-
 impl LspManager {
     fn checkout(&mut self, key: &SessionKey) -> Result<SessionSlot, String> {
         let now = Instant::now();
-        let stale: Vec<_> = self
-            .sessions
-            .iter()
-            .filter(|(_, entry)| now.duration_since(entry.last_used) >= SESSION_IDLE_TIMEOUT)
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in stale {
-            if let Some(entry) = self.sessions.remove(&key) {
-                retire_session(entry);
+        // Language servers are the heaviest thing this process owns, so reap idle
+        // ones on every checkout. `retain` keeps the common no-op case allocation free.
+        self.sessions.retain(|_, entry| {
+            let idle = now.duration_since(entry.last_used) >= SESSION_IDLE_TIMEOUT;
+            if idle {
+                retire_slot(&entry.slot);
             }
-        }
+            !idle
+        });
         if let Some(entry) = self.sessions.get_mut(key) {
             if entry.unavailable_until.is_some_and(|until| until > now) {
                 return Err("language server is temporarily unavailable".into());
@@ -393,7 +468,7 @@ impl LspManager {
         if self.sessions.len() >= MAX_SESSIONS {
             if let Some(oldest) = self.sessions.iter().min_by_key(|(_, entry)| entry.last_used).map(|(key, _)| key.clone()) {
                 if let Some(entry) = self.sessions.remove(&oldest) {
-                    retire_session(entry);
+                    retire_slot(&entry.slot);
                 }
             }
         }
@@ -404,45 +479,54 @@ impl LspManager {
 
     fn mark_unavailable(&mut self, key: &SessionKey, slot: &SessionSlot) {
         let now = Instant::now();
-        if self.sessions.get(key).is_some_and(|entry| Arc::ptr_eq(&entry.slot, slot)) {
-            self.sessions.insert(key.clone(), SessionEntry {
-                slot: Arc::new(OnceCell::new()),
-                last_used: now,
-                unavailable_until: Some(now + UNAVAILABLE_RETRY),
-            });
+        if let Some(entry) = self.sessions.get_mut(key).filter(|entry| Arc::ptr_eq(&entry.slot, slot)) {
+            retire_slot(&entry.slot);
+            entry.slot = Arc::new(OnceCell::new());
+            entry.last_used = now;
+            entry.unavailable_until = Some(now + UNAVAILABLE_RETRY);
         }
     }
 
     fn discard(&mut self, key: &SessionKey, session: &Arc<AsyncMutex<LspSession>>) {
         if self.sessions.get(key).and_then(|entry| entry.slot.get()).is_some_and(|current| Arc::ptr_eq(current, session)) {
             if let Some(entry) = self.sessions.remove(key) {
-                retire_session(entry);
+                retire_slot(&entry.slot);
             }
         }
     }
 }
 
-fn retire_session(entry: SessionEntry) {
-    let Some(session) = entry.slot.get().cloned() else { return; };
+/// Shut a session down off the request path. A slot that never finished starting
+/// holds nothing to shut down; `kill_on_drop` reaps that child instead.
+fn retire_slot(slot: &SessionSlot) {
+    let Some(session) = slot.get().cloned() else { return };
     tokio::spawn(async move {
         session.lock().await.shutdown().await;
     });
 }
 
-fn completion_items(result: Value) -> Value {
-    let mut items = match result {
-        Value::Array(items) => items,
-        Value::Object(mut result) => result
-            .remove("items")
-            .and_then(|items| match items {
-                Value::Array(items) => Some(items),
-                _ => None,
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
+/// Returns the capped item list plus whether it is a partial view of what the
+/// server could offer, so the client knows to re-query instead of filtering
+/// a stale list locally. Our own cap counts as incomplete.
+fn completion_items(result: Value) -> (Value, bool) {
+    let (mut items, incomplete) = match result {
+        Value::Array(items) => (items, false),
+        Value::Object(mut result) => {
+            let incomplete = result.get("isIncomplete").and_then(Value::as_bool).unwrap_or(false);
+            let items = result
+                .remove("items")
+                .and_then(|items| match items {
+                    Value::Array(items) => Some(items),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            (items, incomplete)
+        }
+        _ => (Vec::new(), false),
     };
+    let capped = items.len() > MAX_COMPLETION_ITEMS;
     items.truncate(MAX_COMPLETION_ITEMS);
-    Value::Array(items)
+    (Value::Array(items), incomplete || capped)
 }
 
 fn is_python_import_completion(request: &CompletionRequest) -> bool {
@@ -456,15 +540,12 @@ fn is_python_import_completion(request: &CompletionRequest) -> bool {
         })
 }
 
-async fn python_import_completions(request: &CompletionRequest, environment: &LspEnvironment) -> Result<Value, String> {
+async fn python_import_completions(request: &CompletionRequest, environment: &LspEnvironment) -> Result<(Value, bool), String> {
+    // Every fallback is a fresh interpreter; cap how many exist at once.
     let _permit = tokio::time::timeout(PYTHON_FALLBACK_TIMEOUT, JEDI_PROCESSES.acquire())
         .await
         .map_err(|_| "Python completion queue timed out".to_string())?
         .map_err(|error| error.to_string())?;
-    run_python_import_completions(request, environment).await
-}
-
-async fn run_python_import_completions(request: &CompletionRequest, environment: &LspEnvironment) -> Result<Value, String> {
     let input = PythonCompletionInput {
         path: &request.path,
         content: &request.content,
@@ -514,29 +595,21 @@ async fn run_python_import_completions(request: &CompletionRequest, environment:
 }
 
 impl LspSession {
-    async fn completion(&mut self, context: &RequestContext, request: &CompletionRequest) -> Result<Value, String> {
+    async fn document_request(
+        &mut self,
+        operation: Operation,
+        context: &RequestContext,
+        request: &CompletionRequest,
+    ) -> Result<Value, LspError> {
         self.sync_document(&context.path, context.language, &request.content).await?;
-        self.request(
-            "textDocument/completion",
-            json!({
-                "textDocument": { "uri": file_uri(&context.path) },
-                "position": { "line": request.position.line, "character": request.position.character },
-                "context": { "triggerKind": 1 }
-            }),
-            COMPLETION_TIMEOUT,
-        ).await
-    }
-
-    async fn hover(&mut self, context: &RequestContext, request: &CompletionRequest) -> Result<Value, String> {
-        self.sync_document(&context.path, context.language, &request.content).await?;
-        self.request(
-            "textDocument/hover",
-            json!({
-                "textDocument": { "uri": file_uri(&context.path) },
-                "position": { "line": request.position.line, "character": request.position.character },
-            }),
-            COMPLETION_TIMEOUT,
-        ).await
+        let mut params = json!({
+            "textDocument": { "uri": file_uri(&context.path) },
+            "position": { "line": request.position.line, "character": request.position.character },
+        });
+        if let (Some(params), Value::Object(extra)) = (params.as_object_mut(), operation.extra_params()) {
+            params.extend(extra);
+        }
+        self.request(operation.method(), params, COMPLETION_TIMEOUT).await
     }
 
     async fn start(
@@ -544,7 +617,7 @@ impl LspSession {
         workspace: &Path,
         environment: &LspEnvironment,
         config: &AppConfig,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, LspError> {
         let mut command = Command::new(environment_program(program, environment));
         apply_environment(&mut command, environment)?;
         command
@@ -582,7 +655,7 @@ impl LspSession {
         Ok(session)
     }
 
-    async fn initialize(&mut self, workspace: &Path) -> Result<(), String> {
+    async fn initialize(&mut self, workspace: &Path) -> Result<(), LspError> {
         let uri = file_uri(workspace);
         self.request(
             "initialize",
@@ -601,89 +674,91 @@ impl LspSession {
         self.notify("initialized", json!({})).await
     }
 
-    async fn sync_document(&mut self, path: &Path, language: &str, content: &str) -> Result<(), String> {
+    async fn sync_document(&mut self, path: &Path, language: &str, content: &str) -> Result<(), LspError> {
         let content_hash = content_hash(content);
         let now = Instant::now();
-        if let Some(document) = self.documents.get_mut(path) {
-            document.last_used = now;
-            if document.content_hash == content_hash {
-                return Ok(());
+        // Unchanged content needs no round trip at all: a hover right after a
+        // completion at the same position is free.
+        let open_version = match self.documents.get_mut(path) {
+            Some(document) => {
+                document.last_used = now;
+                if document.content_hash == content_hash {
+                    return Ok(());
+                }
+                document.content_hash = content_hash;
+                document.version += 1;
+                Some(document.version)
             }
-        }
+            None => None,
+        };
 
         let uri = file_uri(path);
-        if let Some(document) = self.documents.get_mut(path) {
-            document.version += 1;
-            document.content_hash = content_hash;
-            let version = document.version;
-            self.notify(
-                "textDocument/didChange",
-                DocumentSync {
-                    text_document: TextDocument {
-                        uri: &uri,
-                        language_id: None,
-                        version,
-                        text: None,
+        match open_version {
+            Some(version) => {
+                self.notify(
+                    "textDocument/didChange",
+                    DocumentSync {
+                        text_document: TextDocument { uri: &uri, language_id: None, version, text: None },
+                        content_changes: Some([TextChange { text: content }]),
                     },
-                    content_changes: Some([TextChange { text: content }]),
-                },
-            ).await
-        } else {
-            if self.documents.len() >= MAX_OPEN_DOCUMENTS {
-                let oldest = self
-                    .documents
-                    .iter()
-                    .min_by_key(|(_, document)| document.last_used)
-                    .map(|(path, _)| path.clone());
-                if let Some(oldest) = oldest {
-                    self.documents.remove(&oldest);
-                    self.notify(
-                        "textDocument/didClose",
-                        json!({ "textDocument": { "uri": file_uri(&oldest) } }),
-                    )
-                    .await?;
-                }
+                ).await
             }
-            self.documents.insert(path.to_path_buf(), DocumentState { version: 1, content_hash, last_used: now });
-            self.notify(
-                "textDocument/didOpen",
-                DocumentSync {
-                    text_document: TextDocument {
-                        uri: &uri,
-                        language_id: Some(language),
-                        version: 1,
-                        text: Some(content),
+            None => {
+                self.close_oldest_document().await?;
+                self.documents.insert(path.to_path_buf(), DocumentState { version: 1, content_hash, last_used: now });
+                self.notify(
+                    "textDocument/didOpen",
+                    DocumentSync {
+                        text_document: TextDocument { uri: &uri, language_id: Some(language), version: 1, text: Some(content) },
+                        content_changes: None,
                     },
-                    content_changes: None,
-                },
-            ).await
+                ).await
+            }
         }
     }
 
-    async fn notify(&mut self, method: &str, params: impl Serialize) -> Result<(), String> {
+    /// Servers keep a parsed tree per open document, so bound how many we hold open.
+    async fn close_oldest_document(&mut self) -> Result<(), LspError> {
+        if self.documents.len() < MAX_OPEN_DOCUMENTS {
+            return Ok(());
+        }
+        let Some(oldest) = self
+            .documents
+            .iter()
+            .min_by_key(|(_, document)| document.last_used)
+            .map(|(path, _)| path.clone())
+        else {
+            return Ok(());
+        };
+        self.documents.remove(&oldest);
+        self.notify("textDocument/didClose", json!({ "textDocument": { "uri": file_uri(&oldest) } })).await
+    }
+
+    async fn notify(&mut self, method: &str, params: impl Serialize) -> Result<(), LspError> {
         self.send(RpcNotification { jsonrpc: "2.0", method, params }).await
     }
 
-    async fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+    async fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value, LspError> {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).await?;
         self.wait_for_response(id, timeout).await
     }
 
-    async fn wait_for_response(&mut self, id: u64, timeout: Duration) -> Result<Value, String> {
-        let response: Value = tokio::time::timeout(timeout, async {
+    async fn wait_for_response(&mut self, id: u64, timeout: Duration) -> Result<Value, LspError> {
+        let response: Value = match tokio::time::timeout(timeout, async {
             loop {
-                let message = self.messages.recv().await.ok_or_else(|| "language server stopped".to_string())?;
-                if message.get("id").and_then(Value::as_u64) == Some(id) {
-                    return Ok::<Value, String>(message);
+                let message = self.messages.recv().await.ok_or("language server stopped")?;
+                // Only a message without `method` is a response. Server-initiated
+                // requests draw ids from their own counter, which collides with ours.
+                let server_method = message.get("method").and_then(Value::as_str);
+                if server_method.is_none() && message.get("id").and_then(Value::as_u64) == Some(id) {
+                    return Ok::<Value, LspError>(message);
                 }
                 // Servers may issue requests such as workspace/configuration. A null
                 // response is valid for capability registration, while configuration
                 // requires one result for each requested item.
-                if let (Some(server_id), Some(method)) =
-                    (message.get("id"), message.get("method").and_then(Value::as_str))
-                {
+                if let (Some(server_id), Some(method)) = (message.get("id"), server_method) {
                     let reply = match method {
                         "workspace/configuration" => {
                             let count = message
@@ -707,21 +782,33 @@ impl LspSession {
                     self.send(reply).await?;
                 }
             }
-        }).await.map_err(|_| "language server request timed out".to_string())??;
+        }).await {
+            Ok(response) => response?,
+            // A slow server is still a usable server; restarting it here would
+            // stall exactly when it is busiest, such as during initial indexing.
+            Err(_) => return Err(LspError::Transient("language server request timed out".to_string())),
+        };
 
         if let Some(error) = response.get("error") {
-            return Err(error.to_string());
+            // Error responses (`ContentModified` and friends) are routine.
+            return Err(LspError::Transient(error.to_string()));
         }
-        Ok(response.get("result").cloned().unwrap_or(Value::Null))
+        // Move the result out rather than cloning it: a completion payload runs to
+        // thousands of items, and deep-copying that tree costs more than the request.
+        Ok(match response {
+            Value::Object(mut response) => response.remove("result").unwrap_or(Value::Null),
+            _ => Value::Null,
+        })
     }
 
-    async fn send(&mut self, message: impl Serialize) -> Result<(), String> {
+    async fn send(&mut self, message: impl Serialize) -> Result<(), LspError> {
         let body = serde_json::to_vec(&message).map_err(|error| error.to_string())?;
         tokio::time::timeout(WRITE_TIMEOUT, async {
             self.stdin.write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes()).await?;
             self.stdin.write_all(&body).await?;
             self.stdin.flush().await
-        }).await.map_err(|_| "language server write timed out".to_string())?.map_err(|error| error.to_string())
+        }).await.map_err(|_| "language server write timed out".to_string())?.map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     async fn shutdown(&mut self) {
@@ -751,13 +838,21 @@ fn content_hash(content: &str) -> u64 {
 
 async fn read_message(reader: &mut BufReader<ChildStdout>) -> Result<Value, String> {
     let mut content_length = None;
+    let mut header_bytes = 0;
     loop {
         let mut line = String::new();
-        let bytes = reader.read_line(&mut line).await.map_err(|e| e.to_string())?;
+        let remaining = MAX_LSP_HEADER_SIZE.checked_sub(header_bytes)
+            .ok_or("language server message header is too large")?;
+        let bytes = (&mut *reader)
+            .take(remaining as u64)
+            .read_line(&mut line)
+            .await
+            .map_err(|e| e.to_string())?;
         if bytes == 0 {
             return Err("language server closed stdout".to_string());
         }
-        if line.len() > MAX_LSP_HEADER_SIZE {
+        header_bytes += bytes;
+        if !line.ends_with('\n') {
             return Err("language server message header is too large".to_string());
         }
         let line = line.trim();
@@ -823,25 +918,7 @@ fn server_command(language: &str, selected: Option<&str>) -> Option<ServerComman
 }
 
 fn server_commands(language: &str) -> Option<&'static [ServerCommand]> {
-    match language {
-        "rust" => Some(RUST),
-        "go" => Some(GO),
-        "python" => Some(PYTHON),
-        "typescript" => Some(TYPESCRIPT),
-        "cpp" => Some(CPP),
-        "json" => Some(JSON),
-        "html" => Some(HTML),
-        "css" => Some(CSS),
-        "yaml" => Some(YAML),
-        "kubernetes" => Some(KUBERNETES),
-        "dockerfile" => Some(DOCKER),
-        "helm" => Some(HELM),
-        "toml" => Some(TOML),
-        "shellscript" => Some(SHELL),
-        "lua" => Some(LUA),
-        "terraform" => Some(TERRAFORM),
-        _ => None,
-    }
+    SERVERS.iter().find(|(id, _)| *id == language).map(|(_, servers)| *servers)
 }
 
 fn environment_for(language: &str, path: &Path) -> LspEnvironment {
@@ -957,8 +1034,48 @@ mod tests {
     #[test]
     fn caps_completion_results_and_pools_kubernetes_with_yaml() {
         let items = (0..MAX_COMPLETION_ITEMS + 1).map(|index| json!({ "label": index })).collect();
-        assert_eq!(completion_items(Value::Array(items)).as_array().unwrap().len(), MAX_COMPLETION_ITEMS);
+        let (capped, incomplete) = completion_items(Value::Array(items));
+        assert_eq!(capped.as_array().unwrap().len(), MAX_COMPLETION_ITEMS);
+        // Truncating on our side leaves the client with a partial view too.
+        assert!(incomplete);
         assert_eq!(document_language_id("yaml"), document_language_id("kubernetes"));
+    }
+
+    #[test]
+    fn preserves_the_server_incomplete_flag() {
+        let list = json!({ "isIncomplete": true, "items": [{ "label": "a" }] });
+        assert_eq!(completion_items(list), (json!([{ "label": "a" }]), true));
+        let list = json!({ "isIncomplete": false, "items": [{ "label": "a" }] });
+        assert_eq!(completion_items(list), (json!([{ "label": "a" }]), false));
+        assert_eq!(completion_items(json!([])), (json!([]), false));
+    }
+
+    #[test]
+    fn keeps_the_session_after_recoverable_failures() {
+        assert!(!LspError::Transient("timed out".into()).is_fatal());
+        assert!(LspError::Fatal("closed stdout".into()).is_fatal());
+        assert!(LspError::from("stdin unavailable").is_fatal());
+    }
+
+    /// A server request carrying the same id as our pending request must not be
+    /// mistaken for its response.
+    #[tokio::test]
+    async fn distinguishes_server_requests_from_responses() {
+        let (sender, messages) = mpsc::channel(4);
+        let mut child = Command::new("cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let mut session = LspSession { child, stdin, messages, next_id: 1, documents: HashMap::new() };
+
+        sender.send(json!({ "jsonrpc": "2.0", "id": 7, "method": "client/registerCapability", "params": {} })).await.unwrap();
+        sender.send(json!({ "jsonrpc": "2.0", "id": 7, "result": { "value": "ours" } })).await.unwrap();
+        let response = session.wait_for_response(7, COMPLETION_TIMEOUT).await.unwrap();
+        assert_eq!(response, json!({ "value": "ours" }));
+
+        let _ = session.child.kill().await;
     }
 
     #[test]
@@ -991,7 +1108,7 @@ mod tests {
             content: "from pydantic import BaseM".into(),
             position: Position { line: 0, character: 26 },
         };
-        let completions = python_import_completions(&request, &LspEnvironment::global()).await.unwrap();
+        let (completions, _) = python_import_completions(&request, &LspEnvironment::global()).await.unwrap();
         assert!(completions.as_array().unwrap().iter().any(|item| item["label"] == "BaseModel"));
     }
 

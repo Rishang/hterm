@@ -117,9 +117,14 @@
 </script>
 
 {#if open}
-  <div class="cmdp-backdrop" role="presentation" onclick={close}>
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="cmdp" role="dialog" aria-label="Open file" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+  <div class="cmdp-backdrop" role="presentation" onclick={close} onkeydown={close}>
+    <div
+      class="cmdp"
+      role="dialog"
+      aria-label="Open file"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}>
       <input
         bind:this={inputEl}
         bind:value={query}
@@ -146,7 +151,6 @@
           {#each results as r, i (r.path)}
             {@const hitSet = new Set(r.positions)}
             {@const slash = r.path.lastIndexOf("/")}
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
             <div
               class="cmdp-row"
               class:selected={i === selected}
@@ -156,14 +160,17 @@
               tabindex="-1"
               aria-selected={i === selected}
               onmouseenter={() => { selected = i; }}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === " ") choose(r.path);
+              }}
               onclick={() => choose(r.path)}>
               {#if slash >= 0}
                 <span class="cmdp-dir">
-                  {#each segments(r.path, hitSet, 0, slash + 1) as seg}{#if seg.hit}<mark>{seg.text}</mark>{:else}{seg.text}{/if}{/each}
+                  {#each segments(r.path, hitSet, 0, slash + 1) as seg, segmentIndex (segmentIndex)}{#if seg.hit}<mark>{seg.text}</mark>{:else}{seg.text}{/if}{/each}
                 </span>
               {/if}
               <span class="cmdp-name">
-                {#each segments(r.path, hitSet, slash + 1, r.path.length) as seg}{#if seg.hit}<mark>{seg.text}</mark>{:else}{seg.text}{/if}{/each}
+                {#each segments(r.path, hitSet, slash + 1, r.path.length) as seg, segmentIndex (segmentIndex)}{#if seg.hit}<mark>{seg.text}</mark>{:else}{seg.text}{/if}{/each}
               </span>
             </div>
           {/each}
