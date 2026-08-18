@@ -6,7 +6,10 @@ info:
 
     ## Authentication
 
-    All endpoints (except `/api/config` and static assets) support two authentication modes:
+    All endpoints (except `/api/config`, `/openapi.json`, and static assets under `/static`) support
+    two authentication modes. Note that `/` (the terminal UI page) requires authentication — with
+    HTTP Basic Auth this triggers the browser's native login prompt on first load, and the browser
+    then resends the same credentials automatically for the WebSocket and all other API calls:
 
     1. **HTTP Basic Auth**: Set via `--credential username:password` flag
        - Header: `Authorization: Basic <base64(username:password)>`
@@ -48,9 +51,21 @@ paths:
   /:
     get:
       summary: Serve web terminal UI
-      description: Returns the main index.html page for the web terminal interface
+      description: |
+        Returns the main index.html page for the web terminal interface
+        (or the custom page set via `--index`, if configured).
+
+        When `--credential` is set, an unauthenticated request gets a `401`
+        with a `WWW-Authenticate` header, which triggers the browser's
+        native Basic Auth login prompt. When `--auth-header` is set instead,
+        a missing header also yields `401`, but without that challenge
+        header, since that credential is expected to be injected by an
+        upstream proxy rather than typed by a user.
       tags:
         - assets
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
       responses:
         '200':
           description: HTML page
@@ -58,6 +73,8 @@ paths:
             text/html:
               schema:
                 type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
   /api/config:
     get:
@@ -131,6 +148,9 @@ paths:
         These tools can be invoked via REST (`/api/tools/call`) or MCP protocol.
       tags:
         - tools
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
       responses:
         '200':
           description: List of tools
@@ -164,6 +184,8 @@ paths:
                           type: string
                           description: File path to read
                       required: [path]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
   /api/tools/call:
     post:
