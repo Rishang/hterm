@@ -219,11 +219,36 @@ impl PtySession {
 
     /// The shell's current working directory, or `None` if it cannot be read.
     ///
-    /// Resolved from `/proc/<pid>/cwd`, which the kernel updates on every `cd`.
-    /// Reading the shell's own cwd rather than parsing OSC 7 means the explorer's
-    /// auto-cd works with any shell and needs no `PROMPT_COMMAND`/shell
-    /// integration. This is a procfs symlink lookup, not disk I/O, so it is
-    /// cheap enough to call from the async PTY task.
+    /// Read from the kernel (`/proc/<pid>/cwd` on Linux, `proc_pidinfo` on
+    /// macOS), which updates on every `cd`. Reading the shell's own cwd rather
+    /// than parsing OSC 7 means the explorer's auto-cd works with any shell and
+    /// needs no `PROMPT_COMMAND`/shell integration. Neither lookup touches disk,
+    /// so it is cheap enough to call from the async PTY task.
+    #[cfg(target_os = "macos")]
+    pub fn cwd(&self) -> Option<String> {
+        let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+        let ret = unsafe {
+            libc::proc_pidinfo(
+                self.child_pid as libc::c_int,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                &mut info as *mut _ as *mut libc::c_void,
+                size,
+            )
+        };
+        if ret < size {
+            return None;
+        }
+        // libc models the MAXPATHLEN buffer as [[c_char; 32]; 32]; view it flat.
+        let buf: &[u8] = unsafe {
+            std::slice::from_raw_parts(info.pvi_cdir.vip_path.as_ptr() as *const u8, std::mem::size_of_val(&info.pvi_cdir.vip_path))
+        };
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        std::str::from_utf8(&buf[..len]).ok().map(str::to_owned)
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub fn cwd(&self) -> Option<String> {
         let path = std::fs::read_link(format!("/proc/{}/cwd", self.child_pid)).ok()?;
         path.to_str().map(str::to_owned)

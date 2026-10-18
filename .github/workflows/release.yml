@@ -10,13 +10,20 @@ permissions:
 jobs:
   build-and-upload:
     name: Build and Upload (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
 
     steps:
       - name: Checkout code
@@ -42,10 +49,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cross
+        if: matrix.cross
         uses: taiki-e/install-action@cross
 
       - name: Build binary
-        run: task build CARGO=cross -- --target ${{ matrix.target }}
+        run: task build ${{ matrix.cross && 'CARGO=cross' || '' }} -- --target ${{ matrix.target }}
 
       - name: Prepare binary for upload
         run: |

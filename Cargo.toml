@@ -15,8 +15,9 @@ serde_json  = "1.0.151"
 serde_yaml  = "0.9.34"
 clap        = { version = "4.6.6", features = ["derive"] }
 # "user" adds nix::unistd::{setuid, setgid, Uid, Gid} for privilege drop.
-# "inotify" backs the file-explorer change watcher — kernel-driven, so no polling.
-nix         = { version = "0.31.3", features = ["term", "process", "signal", "user", "inotify"] }
+nix         = { version = "0.31.3", features = ["term", "process", "signal", "user"] }
+# File-explorer change watcher — inotify on Linux, FSEvents on macOS; no polling.
+notify      = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 tracing     = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 futures     = "0.3.33"

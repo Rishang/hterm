@@ -177,3 +177,4 @@ vite.config.ts.timestamp-*
 .understand-anything/
 .pi-subagents/
 .serena/
+.local/

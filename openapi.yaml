@@ -571,8 +571,8 @@ paths:
         Watches are non-recursive and bounded to 512 active directories per
         session and 32 sessions total; closing a stream releases its watches.
         The session-specific endpoint
-        is valid only while its SSE stream remains connected. Requires Linux
-        inotify.
+        is valid only while its SSE stream remains connected. Backed by inotify
+        on Linux and FSEvents on macOS.
       tags:
         - terminal
       security:

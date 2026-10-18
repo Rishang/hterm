@@ -39,7 +39,7 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 
 ### 🗂️ **Workspace & Editor**
 - File explorer that follows the active terminal directory
-- Live filesystem updates through Linux inotify
+- Live filesystem updates (inotify on Linux, FSEvents on macOS)
 - CodeMirror editor with configurable language servers
 - Search across the explorer root (`Ctrl/Cmd+Shift+F`)
 
@@ -275,7 +275,7 @@ docker run -p 8080:8080 \
 | `GET` | `/api/files/read` | Read a file for the editor |
 | `POST` | `/api/files/copy` | Copy a file or directory |
 | `PATCH` / `DELETE` | `/api/files/{path}` | Rename, move, or delete a file or directory |
-| `GET` | `/api/files/watch` | Open an SSE filesystem-change stream (Linux inotify) |
+| `GET` | `/api/files/watch` | Open an SSE filesystem-change stream (inotify/FSEvents) |
 | `POST` | `/api/files/watch?sessionId={uuid}` | Replace a watch session's directories |
 | `POST` | `/api/lsp/completion` | Request language-server completions |
 | `POST` | `/api/lsp/hover` | Request language-server hover information |
@@ -299,7 +299,7 @@ UTF-8 absolute path). Treat `0x04` as a control frame, not terminal output.
 
 The filesystem watch stream first emits an `endpoint` event with the
 session-specific POST URL; later `change` events carry `{"dirs":["/absolute/path"]}`.
-Watches are non-recursive, require Linux inotify, and are capped at 512 active
+Watches are non-recursive, use native OS notifications (inotify/FSEvents), and are capped at 512 active
 directories per session and 32 sessions total.
 
 ### 💡 **Quick Examples**
