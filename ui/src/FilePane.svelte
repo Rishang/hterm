@@ -17,6 +17,30 @@
   let mdPreviewEl = $state(null);
   let mermaidSeq = 0;
 
+  const isSvg = (path) => /\.svg$/i.test(path);
+  // Rendered through <img>, which never runs scripts embedded in the SVG.
+  const svgDataUrl = (svg) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+  // Relative image paths in markdown point at files beside the .md, not at the
+  // hterm page. SVG is text, so load it through the file API as a data URL.
+  // ponytail: SVG only; raster images need a raw-bytes file endpoint.
+  $effect(() => {
+    const source = tab?.preview ? tab.editContent : null;
+    if (!mdPreviewEl || source == null) return;
+    const dir = tab.path.slice(0, tab.path.lastIndexOf("/") + 1);
+    let cancelled = false;
+    for (const img of mdPreviewEl.querySelectorAll("img[src]")) {
+      const src = img.getAttribute("src");
+      if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(src) || !/\.svg([?#]|$)/i.test(src)) continue;
+      const path = decodeURIComponent(new URL(src, `file://${dir}`).pathname);
+      fetch(`${basePath}/api/files/read?path=${encodeURIComponent(path)}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((file) => { if (!cancelled && file && !file.is_binary) img.src = svgDataUrl(file.content); })
+        .catch(() => {});
+    }
+    return () => { cancelled = true; };
+  });
+
   // ponytail: render mermaid blocks in place after marked() paints; no markdown-it plugin pipeline
   $effect(() => {
     const source = tab?.preview ? tab.editContent : null;
@@ -155,6 +179,8 @@
     {#if tab.preview}
       {#if tab.path.endsWith(".html") || tab.path.endsWith(".htm")}
         <iframe class="fm-html-preview" title="HTML Preview" sandbox="" srcdoc={tab.editContent}></iframe>
+      {:else if isSvg(tab.path)}
+        <div class="fm-svg-preview"><img alt={tab.name} src={svgDataUrl(tab.editContent)} /></div>
       {:else}
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
         <div class="fm-md-preview" bind:this={mdPreviewEl}>{@html marked(tab.editContent)}</div>
@@ -184,7 +210,7 @@
         <span class="fm-lsp-environment" title={lspEnvironment.path ?? "System language environment"}>LSP: {lspEnvironment.kind === "venv" ? `venv (${lspEnvironment.name})` : "global"}</span>
       {/if}
       <div class="fm-bc-tools">
-        {#if tab.path.endsWith(".md") || tab.path.endsWith(".html") || tab.path.endsWith(".htm")}
+        {#if tab.path.endsWith(".md") || tab.path.endsWith(".html") || tab.path.endsWith(".htm") || isSvg(tab.path)}
           <button class="fm-preview-btn" class:active={tab.preview} onclick={() => { tab.preview = !tab.preview; }}>
             {tab.preview ? "Edit" : "Preview"}
           </button>

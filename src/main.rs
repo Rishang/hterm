@@ -11,6 +11,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use axum_server::accept::NoDelayAcceptor;
 use axum_server::Handle;
 use clap::Parser;
 use rust_embed::Embed;
@@ -464,9 +465,14 @@ async fn serve_tcp(
     });
 
     // ── Serve plain or TLS from the pre-bound std listener ───────────────────
+    // TCP_NODELAY: keystroke echoes are tiny frames. With Nagle enabled each
+    // one waits for the client's delayed ACK (~40 ms+), so typing over any
+    // non-loopback link (or a tunnel) arrives in bursts. axum-server leaves
+    // Nagle on unless the acceptor disables it.
     if let Some(tls) = tls_config {
         axum_server::from_tcp_rustls(std_listener, tls)
             .unwrap()
+            .map(|tls| tls.acceptor(NoDelayAcceptor::new()))
             .handle(handle)
             .serve(app.into_make_service())
             .await
@@ -474,6 +480,7 @@ async fn serve_tcp(
     } else {
         axum_server::from_tcp(std_listener)
             .unwrap()
+            .acceptor(NoDelayAcceptor::new())
             .handle(handle)
             .serve(app.into_make_service())
             .await
@@ -508,7 +515,21 @@ async fn serve_asset(
     match Assets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            ([(axum::http::header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
+            // Vite content-hashes every file under assets/, so a new build gets
+            // new URLs and these can be cached forever. Unhashed files (sw.js,
+            // manifest) must revalidate.
+            let cache = if path.starts_with("assets/") {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-cache"
+            };
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, mime.as_ref()),
+                    (axum::http::header::CACHE_CONTROL, cache),
+                ],
+                content.data,
+            ).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }

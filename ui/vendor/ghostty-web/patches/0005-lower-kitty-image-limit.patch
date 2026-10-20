@@ -1,0 +1,15 @@
+diff --git a/lib/ghostty.ts b/lib/ghostty.ts
+index afb8719..6744217 100644
+--- a/lib/ghostty.ts
++++ b/lib/ghostty.ts
+@@ -430,7 +430,9 @@ export class GhosttyTerminal {
+       // default — image transmission commands are silently dropped at
+       // parse time until this limit is set. 64MB is enough for typical
+       // TUI use and matches what coder's old WASM defaulted to.
+-      this.setKittyImageStorageLimit(64 * 1024 * 1024);
++      // hterm: 16MB instead of 64MB bounds the memory untrusted output can pin
++      // per terminal tab while keeping image previews (icat, yazi) working.
++      this.setKittyImageStorageLimit(16 * 1024 * 1024);
+     } catch (e) {
+       this.cleanupOnConstructorFailure();
+       throw e;

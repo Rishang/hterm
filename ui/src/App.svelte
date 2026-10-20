@@ -1,7 +1,6 @@
 <script>
   import { onMount } from "svelte";
   import FileManager from "./FileManager.svelte";
-  import FilePane from "./FilePane.svelte";
   import TermTab from "./TermTab.svelte";
   import ShortcutInfo from "./ShortcutInfo.svelte";
   import SettingsWindow from "./SettingsWindow.svelte";
@@ -14,6 +13,18 @@
   const EDITOR_SETTINGS_KEY = "hterm.editorSettings";
   const EXPLORER_SETTINGS_KEY = "hterm.explorerSettings";
   const GLOBAL_SEARCH_TAB_ID = "__hterm_global_search__";
+
+  // FilePane pulls in CodeMirror and marked (~1 MB). Loading it on first file
+  // open keeps them out of the startup bundle the terminal waits on. A failed
+  // load (network blip, or a chunk 404 after a server upgrade) is not cached,
+  // so the next file open retries.
+  let filePanePromise;
+  function loadFilePane() {
+    return filePanePromise ||= import("./FilePane.svelte").then((m) => m.default, (error) => {
+      filePanePromise = null;
+      throw error;
+    });
+  }
   // Editor state (cursor, scroll, undo history) outlives the keyed CodeEditor
   // that produced it. Keyed by path and language because a language switch
   // rebuilds the extensions and must not reuse the old language's state. Read
@@ -91,7 +102,7 @@
       activeTab = path;
       return;
     }
-    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, loading, skipRefreshOnActivate: true, externalEdit: 0 });
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: /\.svg$/i.test(path), loading, skipRefreshOnActivate: true, externalEdit: 0 });
     tabOrder.push(path);
     lastActiveFileTab = path;
     activeTab = path;
@@ -693,10 +704,18 @@
         {#if layoutMode === "split" && !isSearchTab(activeTab)}
           <button class="split-resize-handle" type="button" aria-label="Resize file and terminal panes" onmousedown={onSplitResizeStart}></button>
           <section class="workspace-pane workspace-pane-file" class:focused={visibleFileTab() && activeTab === visibleFileTab().id} style:flex-basis={splitOrientation === "down" ? `${splitRatio * 100}%` : undefined} aria-label="File pane" onpointerdown={focusFilePane}>
-            <FilePane tab={visibleFileTab()} active={visibleFileTab() && activeTab === visibleFileTab().id} reveal={revealTarget} {lspServers} {autosave} {editorStateFor} onEditorState={saveEditorState} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+            {#await loadFilePane() then FilePane}
+              <FilePane tab={visibleFileTab()} active={visibleFileTab() && activeTab === visibleFileTab().id} reveal={revealTarget} {lspServers} {autosave} {editorStateFor} onEditorState={saveEditorState} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+            {:catch}
+              <p class="load-error" role="alert">Failed to load the editor. Reopen the file or reload the page.</p>
+            {/await}
           </section>
         {:else if isFileTab(activeTab)}
-          <FilePane tab={visibleFileTab()} active={true} reveal={revealTarget} {lspServers} {autosave} {editorStateFor} onEditorState={saveEditorState} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+          {#await loadFilePane() then FilePane}
+            <FilePane tab={visibleFileTab()} active={true} reveal={revealTarget} {lspServers} {autosave} {editorStateFor} onEditorState={saveEditorState} onFocus={focusFilePane} onOpenSidebar={() => { showSidebar = true; }} />
+          {:catch}
+            <p class="load-error" role="alert">Failed to load the editor. Reopen the file or reload the page.</p>
+          {/await}
         {/if}
 
         <section class="workspace-pane workspace-pane-search" class:hidden={!isSearchTab(activeTab)} aria-label="Search in files">

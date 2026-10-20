@@ -1,0 +1,16 @@
+{
+  "name": "ghostty-web",
+  "version": "0.4.1-hterm",
+  "description": "Vendored ghostty-web build; regenerate with build.sh",
+  "license": "MIT",
+  "type": "module",
+  "module": "./ghostty-web.es.js",
+  "types": "./ghostty-web.d.ts",
+  "exports": {
+    ".": {
+      "types": "./ghostty-web.d.ts",
+      "import": "./ghostty-web.es.js"
+    },
+    "./ghostty-vt.wasm": "./ghostty-vt.wasm"
+  }
+}

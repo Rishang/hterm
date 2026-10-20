@@ -3,6 +3,8 @@
   import { Ghostty } from "ghostty-web";
 
   let ghosttyPromise;
+  /** `/api/config` is fixed for the server's lifetime, so every tab shares one fetch. */
+  let fontConfigPromise;
 
   function loadGhostty() {
     return ghosttyPromise ||= Ghostty.load(ghosttyWasmUrl);
@@ -25,6 +27,11 @@
   const INTERACTIVE_OUTPUT_BYTES = 8 * 1024;
   const MAX_MERGED_OUTPUT_BYTES = 256 * 1024;
   const MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
+  // Each connection gets a fresh shell, but the browser terminal keeps whatever modes the
+  // previous program left on. Without this, a TUI that was running when the socket dropped
+  // leaves mouse tracking / kitty keys enabled and the new shell prints the reports as text.
+  const MODE_RESET = "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l"
+    + "\x1b[?2004l\x1b[?2026l\x1b[?1l\x1b>\x1b[?25h\x1b[?7h\x1b[<99u\x1b[>4m\x1b7\x1b[r\x1b8\x1b[0m";
   const DEFAULT_FONT_FAMILY = "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'FiraMono Nerd Font', 'Noto Sans Mono', monospace";
   const DEFAULT_FONT_SIZE = 15;
   const MAX_FIND_MATCHES = 10000;
@@ -54,6 +61,8 @@
   /** @type {Uint8Array[]} */
   let pendingOutput = [];
   let pendingOutputBytes = 0;
+  /** Whether a socket has opened before, so the next open is a reconnect. */
+  let hadSession = false;
   let lastPtyResizeAt = 0;
   const clipboard = { read: false, write: false };
   let findOpen = $state(false);
@@ -70,6 +79,7 @@
   let selectingBlock = false;
   let blockSelectionStart = null;
   let blockSelection = $state(null);
+  let lastMotion = "";
   /** @type {HTMLCanvasElement|null} */
   let cachedCanvas = null;
 
@@ -422,6 +432,11 @@
     if (selectingWithShift || !hasMouseTracking()) return;
     if (!cell || !isCanvasEvent(e)) return;
     if (!mode(1003) && !(mode(1002) && e.buttons)) return;
+    // Motion is reported per cell; pixel-level mousemoves within one cell would
+    // otherwise each become a WebSocket frame and an app redraw.
+    const motion = `${cell.col},${cell.row},${e.buttons},${mouseModifiers(e)}`;
+    if (motion === lastMotion) { consumeMouseEvent(e); return; }
+    lastMotion = motion;
     sendMouseEvent((32 | pressedMouseButton(e.buttons) | mouseModifiers(e)), cell);
     consumeMouseEvent(e);
   }
@@ -575,6 +590,9 @@
       if (disposed || ws !== socket) { socket.close(); return; }
       reconnectDelay = RECONNECT_DELAY_MS;
       lastSentCols = 0; lastSentRows = 0;
+      lastMotion = "";
+      if (hadSession) writeOutput(`${MODE_RESET}\r\n\x1b[2m[reconnected: new shell]\x1b[0m\r\n`);
+      hadSession = true;
       if (doFit()) sendResize(term.cols, term.rows);
     };
     socket.onmessage = (e) => {
@@ -621,6 +639,9 @@
   // Re-fit and connect when activation or the persistent pane's layout changes.
   $effect(() => {
     layoutKey;
+    // ghostty-web redraws the cursor row every animation frame while blinking,
+    // hidden tabs included, so only the visible terminal blinks.
+    if (term) term.options.cursorBlink = active;
     if (!active) {
       clearTimer("initialFit");
       clearTimer("reconnect");
@@ -661,18 +682,22 @@
   }
 
   /** Server theme configuration is optional; fall back to the editor's coding-font stack. */
-  async function fetchFontConfig(signal) {
-    try {
-      const res = await fetch(`${basePath}/api/config`, { signal });
-      if (!res.ok) return {};
-      const { theme = {} } = await res.json();
-      return {
-        ...(theme.fontFamily ? { fontFamily: theme.fontFamily } : {}),
-        ...(theme.fontSize ? { fontSize: theme.fontSize } : {}),
-      };
-    } catch {
-      return {};
-    }
+  function fetchFontConfig() {
+    return fontConfigPromise ||= (async () => {
+      try {
+        const res = await fetch(`${basePath}/api/config`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { theme = {} } = await res.json();
+        return {
+          ...(theme.fontFamily ? { fontFamily: theme.fontFamily } : {}),
+          ...(theme.fontSize ? { fontSize: theme.fontSize } : {}),
+        };
+      } catch {
+        // Not cached: the next tab retries instead of keeping the fallback font.
+        fontConfigPromise = null;
+        return {};
+      }
+    })();
   }
 
   function handleTerminalKey(e) {
@@ -714,15 +739,13 @@
   }
 
   async function initializeTerminal(signal) {
-    const fontConfig = await fetchFontConfig(signal);
-    if (signal.aborted || disposed) return;
-
     try {
-      const ghostty = await loadGhostty();
+      // In parallel: serially the wasm download waits a full round trip for the config.
+      const [fontConfig, ghostty] = await Promise.all([fetchFontConfig(), loadGhostty()]);
       if (signal.aborted || disposed) return;
       term = new Terminal({
         ghostty,
-        cursorBlink: true, cursorStyle: "bar", scrollback: 3000,
+        cursorBlink: active, cursorStyle: "bar", scrollback: 3000,
         fontFamily: DEFAULT_FONT_FAMILY,
         fontSize: DEFAULT_FONT_SIZE,
         ...fontConfig,

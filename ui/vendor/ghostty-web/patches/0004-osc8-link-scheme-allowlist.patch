@@ -1,0 +1,16 @@
+diff --git a/lib/providers/osc8-link-provider.ts b/lib/providers/osc8-link-provider.ts
+index aa4e8d2..81ea525 100644
+--- a/lib/providers/osc8-link-provider.ts
++++ b/lib/providers/osc8-link-provider.ts
+@@ -100,8 +100,9 @@ export class OSC8LinkProvider implements ILinkProvider {
+           text: uri,
+           range,
+           activate: (event) => {
+-            // Open link if Ctrl/Cmd is pressed
+-            if (event.ctrlKey || event.metaKey) {
++            // Open link if Ctrl/Cmd is pressed. hterm: the URI comes from program
++            // output, so only web and mail links open (no javascript:, data:, file:).
++            if ((event.ctrlKey || event.metaKey) && /^(https?|mailto):/i.test(uri)) {
+               window.open(uri, '_blank', 'noopener,noreferrer');
+             }
+           },

@@ -1,0 +1,61 @@
+diff --git a/lib/ghostty.ts b/lib/ghostty.ts
+index cb7f150..afb8719 100644
+--- a/lib/ghostty.ts
++++ b/lib/ghostty.ts
+@@ -291,6 +291,10 @@ export class GhosttyTerminal {
+ 
+   /** Cell pool for zero-allocation rendering */
+   private cellPool: GhosttyCell[] = [];
++  // hterm: cellPool already mirrors the terminal. getLine() is called once per
++  // row and used to rebuild the whole viewport each time (O(rows x cells) WASM
++  // reads per frame); now only write/resize/config changes force a rebuild.
++  private viewportFresh = false;
+ 
+   /**
+    * Cell pixel dimensions last pushed to the WASM terminal via
+@@ -491,6 +495,7 @@ export class GhosttyTerminal {
+    * write the merged 768-byte buffer back.
+    */
+   private applyConfig(config: GhosttyTerminalConfig): void {
++    this.viewportFresh = false;
+     if (config.fgColor) this.setColorOption(TerminalOption.COLOR_FOREGROUND, config.fgColor);
+     if (config.bgColor) this.setColorOption(TerminalOption.COLOR_BACKGROUND, config.bgColor);
+     if (config.cursorColor) {
+@@ -650,11 +655,13 @@ export class GhosttyTerminal {
+     const ptr = this.exports.ghostty_wasm_alloc_u8_array(bytes.length);
+     new Uint8Array(this.memory.buffer).set(bytes, ptr);
+     this.exports.ghostty_terminal_vt_write(this.handle, ptr, bytes.length);
++    this.viewportFresh = false;
+     this.exports.ghostty_wasm_free_u8_array(ptr, bytes.length);
+   }
+ 
+   resize(cols: number, rows: number): void {
+     if (cols === this._cols && rows === this._rows) return;
++    this.viewportFresh = false;
+     this._cols = cols;
+     this._rows = rows;
+     this.exports.ghostty_terminal_resize(
+@@ -900,6 +907,7 @@ export class GhosttyTerminal {
+     if (w === this.cellWidthPx && h === this.cellHeightPx) return;
+     this.cellWidthPx = w;
+     this.cellHeightPx = h;
++    this.viewportFresh = false;
+     this.exports.ghostty_terminal_resize(this.handle, this._cols, this._rows, w, h);
+   }
+ 
+@@ -1149,6 +1157,7 @@ export class GhosttyTerminal {
+    */
+   getViewport(): GhosttyCell[] {
+     this.update();
++    if (this.viewportFresh) return this.cellPool;
+ 
+     // Pre-zero the pool so cells we don't visit (iterator ends early, or
+     // we exceed the configured cols/rows) read as empty.
+@@ -1370,6 +1379,7 @@ export class GhosttyTerminal {
+ 
+     this.rowDirtyCache = dirtyCache;
+     this.rowWrapCache = wrapCache;
++    this.viewportFresh = true;
+     return this.cellPool;
+   }
+ 
