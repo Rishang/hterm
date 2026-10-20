@@ -20,5 +20,7 @@
       </select>
     </label>
   {/each}
+  {:catch}
+  <p class="load-error" role="alert">Failed to load the language server list. Reopen settings or reload the page.</p>
   {/await}
 </div>

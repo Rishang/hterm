@@ -30,7 +30,9 @@ done
 
 # JS before WASM: in lib mode Vite inlines ghostty-vt.wasm as base64 when it
 # exists, adding ~830 KB of dead weight since hterm passes the wasm URL itself.
-pnpm install --ignore-scripts
+# The fork ships only bun.lock, so build tooling is pinned by our own lockfile.
+cp "$here/pnpm-lock.yaml" .
+pnpm install --frozen-lockfile --ignore-scripts
 pnpm exec vite build
 ./scripts/build-wasm.sh
 

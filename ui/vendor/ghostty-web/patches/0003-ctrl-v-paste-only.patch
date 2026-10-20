@@ -1,0 +1,26 @@
+diff --git a/lib/input-handler.ts b/lib/input-handler.ts
+index 2de9c01..23ffb11 100644
+--- a/lib/input-handler.ts
++++ b/lib/input-handler.ts
+@@ -412,18 +412,10 @@ export class InputHandler {
+       }
+     }
+ 
+-    // Ctrl+V / Cmd+V: emit \x16 to the PTY so apps that read it natively
+-    // (e.g. opencode image paste via osascript) receive the signal, then let
+-    // the browser paste event fire so handlePaste covers text content.
++    // hterm: Ctrl+V / Cmd+V only trigger the browser paste event, as upstream.
++    // The fork also emitted \x16 first; shells treat ^V as quoted-insert, which
++    // swallows the bracketed-paste ESC and runs pasted newlines as commands.
+     if ((event.ctrlKey || event.metaKey) && event.code === 'KeyV') {
+-      const encoded = this.encoder.encode({
+-        key: Key.V,
+-        mods: event.ctrlKey ? Mods.CTRL : Mods.SUPER,
+-        action: KeyAction.PRESS,
+-      });
+-      if (encoded.length > 0) {
+-        this.onDataCallback(new TextDecoder().decode(encoded));
+-      }
+       return;
+     }
+ 

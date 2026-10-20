@@ -489,6 +489,7 @@ html, body {
 .settings-content { flex: 1; min-width: 0; padding: 20px 24px; overflow-y: auto; }
 .settings-content h3 { margin-bottom: 6px; color: var(--text-strong); font-size: 15px; }
 .settings-description { margin-bottom: 18px; color: var(--text-subtle); font-size: 12px; line-height: 1.45; }
+.load-error { padding: 12px; color: var(--status-disconnected); font-size: 12px; }
 .lsp-settings-list { display: grid; gap: 9px; max-width: 540px; }
 .lsp-settings-list label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, 1.4fr); align-items: center; gap: 14px; font-size: 12px; }
 .lsp-settings-list select {

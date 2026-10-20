@@ -1,5 +1,5 @@
-import { K as c, a as A, M as T, b as Y, C as x, c as D, E as k, T as G, G as q } from "./terminal-core-8ce6db6c.js";
-import { D as wt, d as bt, e as vt } from "./terminal-core-8ce6db6c.js";
+import { K as c, a as A, M as E, b as z, C as x, c as D, E as T, T as G, G as q } from "./terminal-core-73417537.js";
+import { D as wt, d as bt, e as vt } from "./terminal-core-73417537.js";
 const $ = {
   // Letters
   KeyA: c.A,
@@ -120,7 +120,7 @@ const $ = {
   F22: c.F22,
   F23: c.F23,
   F24: c.F24
-}, V = class L {
+}, U = class L {
   /**
    * Create a new InputHandler
    * @param ghostty - Ghostty instance (for creating KeyEncoder)
@@ -173,8 +173,8 @@ const $ = {
    * @returns Mods flags
    */
   extractModifiers(t) {
-    let i = T.NONE;
-    return t.shiftKey && (i |= T.SHIFT), t.ctrlKey && (i |= T.CTRL), t.altKey && (i |= T.ALT), t.metaKey && (i |= T.SUPER), i;
+    let i = E.NONE;
+    return t.shiftKey && (i |= E.SHIFT), t.ctrlKey && (i |= E.CTRL), t.altKey && (i |= E.ALT), t.metaKey && (i |= E.SUPER), i;
   }
   /**
    * Handle keydown event
@@ -195,15 +195,8 @@ const $ = {
       t.preventDefault();
       return;
     }
-    if ((t.ctrlKey || t.metaKey) && t.code === "KeyV") {
-      const n = this.encoder.encode({
-        key: c.V,
-        mods: t.ctrlKey ? T.CTRL : T.SUPER,
-        action: Y.PRESS
-      });
-      n.length > 0 && this.onDataCallback(new TextDecoder().decode(n));
+    if ((t.ctrlKey || t.metaKey) && t.code === "KeyV")
       return;
-    }
     if (t.metaKey && t.code === "KeyC") {
       this.onCopyCallback && this.onCopyCallback() && t.preventDefault();
       return;
@@ -221,7 +214,7 @@ const $ = {
     let r;
     try {
       const n = this.encoder.encode({
-        action: Y.PRESS,
+        action: z.PRESS,
         key: i,
         mods: e,
         utf8: s
@@ -556,8 +549,8 @@ const $ = {
     return !this.isDisposed;
   }
 };
-V.BEFORE_INPUT_IGNORE_MS = 100;
-let Q = V;
+U.BEFORE_INPUT_IGNORE_MS = 100;
+let Q = U;
 class X {
   // Terminal instance for buffer access
   constructor(t) {
@@ -693,7 +686,7 @@ class J {
           text: u,
           range: p,
           activate: (m) => {
-            (m.ctrlKey || m.metaKey) && window.open(u, "_blank", "noopener,noreferrer");
+            (m.ctrlKey || m.metaKey) && /^(https?|mailto):/i.test(u) && window.open(u, "_blank", "noopener,noreferrer");
           }
         });
       }
@@ -1149,7 +1142,7 @@ const Z = [
 function H(y) {
   return tt.get(y) ?? -1;
 }
-const et = 1109742, E = {
+const et = 1109742, k = {
   foreground: "#d4d4d4",
   background: "#1e1e1e",
   cursor: "#ffffff",
@@ -1175,7 +1168,7 @@ const et = 1109742, E = {
   brightCyan: "#29b8db",
   brightWhite: "#ffffff"
 };
-function N(y, t) {
+function Y(y, t) {
   return y.width === t.width && y.height === t.height && y.format === t.format && y.dataPtr === t.data.byteOffset && y.dataLen === t.data.length;
 }
 class it {
@@ -1184,7 +1177,7 @@ class it {
     const e = t.getContext("2d", { alpha: !0 });
     if (!e)
       throw new Error("Failed to get 2D rendering context");
-    this.ctx = e, this.fontSize = i.fontSize ?? 15, this.fontFamily = i.fontFamily ?? "monospace", this.cursorStyle = i.cursorStyle ?? "block", this.cursorBlink = i.cursorBlink ?? !1, this.theme = { ...E, ...i.theme }, this.devicePixelRatio = i.devicePixelRatio ?? window.devicePixelRatio ?? 1, this.palette = [
+    this.ctx = e, this.fontSize = i.fontSize ?? 15, this.fontFamily = i.fontFamily ?? "monospace", this.cursorStyle = i.cursorStyle ?? "block", this.cursorBlink = i.cursorBlink ?? !1, this.theme = { ...k, ...i.theme }, this.devicePixelRatio = i.devicePixelRatio ?? window.devicePixelRatio ?? 1, this.palette = [
       this.theme.black,
       this.theme.red,
       this.theme.green,
@@ -1609,7 +1602,7 @@ class it {
     const s = this.kittyImageCache.get(e), r = (o = t.getKittyImagePixels) == null ? void 0 : o.call(t, i, e);
     if (!r)
       return (s == null ? void 0 : s.canvas) ?? null;
-    if (s && N(s, r))
+    if (s && Y(s, r))
       return s.canvas;
     const n = this.decodeKittyImageToCanvas(r);
     return n ? (this.kittyImageCache.set(e, {
@@ -1744,7 +1737,7 @@ class it {
         let s = this.kittyImageCache.get(e.imageId);
         const r = t.getKittyImagePixels(i, e.imageId);
         if (r) {
-          if (!s || !N(s, r)) {
+          if (!s || !Y(s, r)) {
             const n = this.decodeKittyImageToCanvas(r);
             if (!n)
               continue;
@@ -1867,7 +1860,7 @@ class it {
    * Update theme colors
    */
   setTheme(t) {
-    this.theme = { ...E, ...t }, this.palette = [
+    this.theme = { ...k, ...t }, this.palette = [
       this.theme.black,
       this.theme.red,
       this.theme.green,
@@ -1996,7 +1989,7 @@ class it {
 const _ = class I {
   // ms between scroll steps
   constructor(t, i, e, s) {
-    this.selectionStart = null, this.selectionEnd = null, this.isSelecting = !1, this.mouseDownX = 0, this.mouseDownY = 0, this.dragThresholdMet = !1, this.mouseDownTarget = null, this.dirtySelectionRows = /* @__PURE__ */ new Set(), this.selectionChangedEmitter = new k(), this.boundMouseUpHandler = null, this.boundContextMenuHandler = null, this.boundClickHandler = null, this.boundDocumentMouseMoveHandler = null, this.autoScrollInterval = null, this.autoScrollDirection = 0, this.terminal = t, this.renderer = i, this.wasmTerm = e, this.textarea = s, this.attachEventListeners();
+    this.selectionStart = null, this.selectionEnd = null, this.isSelecting = !1, this.mouseDownX = 0, this.mouseDownY = 0, this.dragThresholdMet = !1, this.mouseDownTarget = null, this.dirtySelectionRows = /* @__PURE__ */ new Set(), this.selectionChangedEmitter = new T(), this.boundMouseUpHandler = null, this.boundContextMenuHandler = null, this.boundClickHandler = null, this.boundDocumentMouseMoveHandler = null, this.autoScrollInterval = null, this.autoScrollDirection = 0, this.terminal = t, this.renderer = i, this.wasmTerm = e, this.textarea = s, this.attachEventListeners();
   }
   // pixels from edge to trigger scroll
   /**
@@ -2471,7 +2464,7 @@ _.AUTO_SCROLL_EDGE_SIZE = 30;
 _.AUTO_SCROLL_SPEED = 3;
 _.AUTO_SCROLL_INTERVAL = 50;
 let st = _;
-function U(y, t) {
+function N(y, t) {
   const i = String(y || "").trim();
   if (!i)
     return t;
@@ -2490,7 +2483,7 @@ function U(y, t) {
   } : t;
 }
 function rt(y, t, i) {
-  const e = U(i.foreground, { r: 212, g: 212, b: 212 }), s = U(i.background, { r: 30, g: 30, b: 30 }), r = {
+  const e = N(i.foreground, { r: 212, g: 212, b: 212 }), s = N(i.background, { r: 30, g: 30, b: 30 }), r = {
     codepoint: 32,
     fg_r: e.r,
     fg_g: e.g,
@@ -2507,19 +2500,19 @@ function rt(y, t, i) {
   };
   return Array.from({ length: t }, () => Array.from({ length: y }, () => ({ ...r })));
 }
-const W = class z extends G {
+const V = class W extends G {
   constructor(t = {}) {
     const i = t.ghostty ?? lt();
     super(i, t), this.unicode = {
       get activeVersion() {
         return "15.1";
       }
-    }, this.selectionChangeEmitter = new k(), this.keyEmitter = new k(), this.renderEmitter = new k(), this.mouseCursorChangeEmitter = new k(), this.onSelectionChange = this.selectionChangeEmitter.event, this.onKey = this.keyEmitter.event, this.onRender = this.renderEmitter.event, this.onMouseCursorChange = this.mouseCursorChangeEmitter.event, this.isOpen = !1, this.writeQueue = [], this.awaitingEcho = !1, this.syncOutputStartTime = void 0, this.currentTheme = { ...E }, this.targetViewportY = 0, this.isDraggingScrollbar = !1, this.scrollbarDragStart = null, this.scrollbarDragStartViewportY = 0, this.scrollbarVisible = !1, this.scrollbarOpacity = 0, this.SCROLLBAR_HIDE_DELAY_MS = 1500, this.SCROLLBAR_FADE_DURATION_MS = 200, this.bootstrapCells = null, this.bootstrapDirty = !1, this.renderTick = () => {
+    }, this.selectionChangeEmitter = new T(), this.keyEmitter = new T(), this.renderEmitter = new T(), this.mouseCursorChangeEmitter = new T(), this.onSelectionChange = this.selectionChangeEmitter.event, this.onKey = this.keyEmitter.event, this.onRender = this.renderEmitter.event, this.onMouseCursorChange = this.mouseCursorChangeEmitter.event, this.isOpen = !1, this.writeQueue = [], this.awaitingEcho = !1, this.syncOutputStartTime = void 0, this.currentTheme = { ...k }, this.targetViewportY = 0, this.isDraggingScrollbar = !1, this.scrollbarDragStart = null, this.scrollbarDragStartViewportY = 0, this.scrollbarVisible = !1, this.scrollbarOpacity = 0, this.SCROLLBAR_HIDE_DELAY_MS = 1500, this.SCROLLBAR_FADE_DURATION_MS = 200, this.bootstrapCells = null, this.bootstrapDirty = !1, this.renderTick = () => {
       if (this.animationFrameId = void 0, this.isDisposed || !this.isOpen)
         return;
       if (this.wasmTerm.getMode(2026, !1)) {
         const s = performance.now();
-        if (this.syncOutputStartTime === void 0 && (this.syncOutputStartTime = s), s - this.syncOutputStartTime < z.SYNC_OUTPUT_TIMEOUT_MS) {
+        if (this.syncOutputStartTime === void 0 && (this.syncOutputStartTime = s), s - this.syncOutputStartTime < W.SYNC_OUTPUT_TIMEOUT_MS) {
           this.requestRender();
           return;
         }
@@ -2629,7 +2622,7 @@ const W = class z extends G {
       }
     }, this.handleMouseUp = () => {
       this.isDraggingScrollbar && (this.isDraggingScrollbar = !1, this.scrollbarDragStart = null, this.canvas && (this.canvas.style.userSelect = "", this.canvas.style.webkitUserSelect = ""), this.scrollbarVisible && this.getScrollbackLength() > 0 && this.showScrollbar());
-    }, this.currentTheme = { ...E, ...t.theme }, this.bootstrapBuffer = {
+    }, this.currentTheme = { ...k, ...t.theme }, this.bootstrapBuffer = {
       getLine: (e) => {
         var s;
         return this.bootstrapCells && e >= 0 && e < this.bootstrapCells.length ? this.bootstrapCells[e] : ((s = this.wasmTerm) == null ? void 0 : s.getLine(e)) ?? null;
@@ -2689,7 +2682,7 @@ const W = class z extends G {
         case "theme":
           if (this.renderer && this.wasmTerm) {
             const s = i && typeof i == "object" ? i : {}, r = Object.keys(s).length > 0;
-            this.currentTheme = r ? { ...this.currentTheme, ...s } : { ...E }, this.renderer.setTheme(this.currentTheme), this.wasmTerm.setColors(this.buildThemeColorsConfig(this.currentTheme));
+            this.currentTheme = r ? { ...this.currentTheme, ...s } : { ...k }, this.renderer.setTheme(this.currentTheme), this.wasmTerm.setColors(this.buildThemeColorsConfig(this.currentTheme));
           }
           break;
         case "fontSize":
@@ -3084,7 +3077,7 @@ const W = class z extends G {
     }
   }
   armBootstrapBlank() {
-    const t = { ...E, ...this.options.theme };
+    const t = { ...k, ...this.options.theme };
     this.bootstrapCells = rt(this.cols, this.rows, {
       foreground: t.foreground,
       background: t.background
@@ -3203,8 +3196,8 @@ const W = class z extends G {
     this.scrollToLine(Math.max(0, Math.min(i, m)));
   }
 };
-W.SYNC_OUTPUT_TIMEOUT_MS = 500;
-let ut = W;
+V.SYNC_OUTPUT_TIMEOUT_MS = 500;
+let ut = V;
 const nt = 2, ot = 1, at = 15, ht = 100;
 class dt {
   constructor() {
@@ -3296,7 +3289,7 @@ class dt {
 }
 class mt {
   constructor() {
-    this._pasteListener = null, this._emitter = new k(), this.onImagePaste = this._emitter.event;
+    this._pasteListener = null, this._emitter = new T(), this.onImagePaste = this._emitter.event;
   }
   /**
    * Activate the addon (called by Terminal.loadAddon)
@@ -3367,18 +3360,18 @@ export {
   it as CanvasRenderer,
   x as CellFlags,
   wt as DirtyState,
-  k as EventEmitter,
+  T as EventEmitter,
   dt as FitAddon,
   q as Ghostty,
   bt as GhosttyTerminal,
   mt as ImagePasteAddon,
   Q as InputHandler,
   c as Key,
-  Y as KeyAction,
+  z as KeyAction,
   vt as KeyEncoder,
   A as KeyEncoderOption,
   X as LinkDetector,
-  T as Mods,
+  E as Mods,
   J as OSC8LinkProvider,
   st as SelectionManager,
   ut as Terminal,

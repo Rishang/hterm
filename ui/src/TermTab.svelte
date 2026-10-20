@@ -590,6 +590,7 @@
       if (disposed || ws !== socket) { socket.close(); return; }
       reconnectDelay = RECONNECT_DELAY_MS;
       lastSentCols = 0; lastSentRows = 0;
+      lastMotion = "";
       if (hadSession) writeOutput(`${MODE_RESET}\r\n\x1b[2m[reconnected: new shell]\x1b[0m\r\n`);
       hadSession = true;
       if (doFit()) sendResize(term.cols, term.rows);
@@ -685,13 +686,15 @@
     return fontConfigPromise ||= (async () => {
       try {
         const res = await fetch(`${basePath}/api/config`);
-        if (!res.ok) return {};
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const { theme = {} } = await res.json();
         return {
           ...(theme.fontFamily ? { fontFamily: theme.fontFamily } : {}),
           ...(theme.fontSize ? { fontSize: theme.fontSize } : {}),
         };
       } catch {
+        // Not cached: the next tab retries instead of keeping the fallback font.
+        fontConfigPromise = null;
         return {};
       }
     })();

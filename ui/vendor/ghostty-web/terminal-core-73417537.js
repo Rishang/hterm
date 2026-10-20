@@ -3197,7 +3197,7 @@ const Gi = class Be {
     if (!this.handle)
       throw new Error("Failed to create terminal");
     try {
-      this.installCallbacks(), n && this.applyConfig(n), this.exports.ghostty_terminal_mode_set(this.handle, $r(2027, !1), !0), this.setKittyImageStorageLimit(64 * 1024 * 1024);
+      this.installCallbacks(), n && this.applyConfig(n), this.exports.ghostty_terminal_mode_set(this.handle, $r(2027, !1), !0), this.setKittyImageStorageLimit(16 * 1024 * 1024);
     } catch (o) {
       throw this.cleanupOnConstructorFailure(), o;
     }
