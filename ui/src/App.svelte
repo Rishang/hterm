@@ -102,7 +102,7 @@
       activeTab = path;
       return;
     }
-    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: false, loading, skipRefreshOnActivate: true, externalEdit: 0 });
+    fileTabs.push({ id: path, path, name: path.split("/").pop() || path, content, editContent: content, mode: "edit", isBinary, error, saveStatus: "", langOverride: "", preview: /\.svg$/i.test(path), loading, skipRefreshOnActivate: true, externalEdit: 0 });
     tabOrder.push(path);
     lastActiveFileTab = path;
     activeTab = path;
