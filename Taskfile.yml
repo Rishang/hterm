@@ -9,6 +9,7 @@ tasks:
       - pnpm run build
     sources:
       - src/**/*
+      - vendor/**/*
       - index.html
       - package.json
       - vite.config.js
@@ -29,6 +30,11 @@ tasks:
       - openapi.yaml
     generates:
       - target/release/hterm
+
+  ghostty-web:
+    desc: Rebuild the vendored ghostty-web from source (needs Zig 0.15.2)
+    cmds:
+      - ui/vendor/ghostty-web/build.sh
 
   dev:
     desc: Run the dev server

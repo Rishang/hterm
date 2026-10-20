@@ -1,5 +1,6 @@
 <script>
-  import { LSP_SERVER_OPTIONS } from "./autocomplete/lsp.js";
+  // lsp.js is imported lazily below: a static import would pull CodeMirror and
+  // marked into the startup bundle the terminal waits on.
 
   /** @type {{ servers?: Record<string, string>, onchange?: (language: string, server: string) => void }} */
   let { servers = {}, onchange } = $props();
@@ -7,6 +8,7 @@
 
 <p class="settings-description">Choose the server used for each language, or disable LSP for it. Servers must be installed on the hterm host.</p>
 <div class="lsp-settings-list">
+  {#await import("./autocomplete/lsp.js") then { LSP_SERVER_OPTIONS }}
   {#each LSP_SERVER_OPTIONS as { language, id, options } (id)}
     <label>
       <span>{language}</span>
@@ -18,4 +20,5 @@
       </select>
     </label>
   {/each}
+  {/await}
 </div>

@@ -31,8 +31,10 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(1);
 /// Flush immediately once coalesced data reaches this size.
 const MAX_COALESCE_SIZE: usize = 16 * 1024;
 
-/// Outbound message channel depth (writer task).
-const WS_OUT_CAP: usize = 32;
+/// Outbound message channel depth (writer task).  Kept small so a slow link
+/// backpressures the PTY (and the shell) instead of queueing seconds of output
+/// ahead of keystroke echoes: worst case 4 × 16 KiB = 64 KiB per session.
+const WS_OUT_CAP: usize = 4;
 
 /// Inbound command channel depth. Keep this large enough that short paste/input
 /// bursts do not block the WebSocket reader while PTY output is busy.
@@ -316,6 +318,9 @@ async fn pty_main_loop(
     coalesce.extend_from_slice(&[MSG_OUTPUT]);
 
     let mut ping_ticker = time::interval(ping_interval);
+    // Default `Burst` would fire every tick missed during heavy output back to
+    // back, filling the small outbound queue with pings instead of output.
+    ping_ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     ping_ticker.tick().await; // discard the immediate first tick
 
     // Working-directory tracking for the explorer's auto-cd. Reported once up
@@ -356,7 +361,7 @@ async fn pty_main_loop(
                                 },
                                 res = session.read(&mut buf) => match res {
                                     Ok(0) | Err(_) => {
-                                        flush_coalesce(&mut coalesce, &out_tx).await;
+                                        flush_coalesce(&mut coalesce, &out_tx, &mut cmd_rx, &session).await;
                                         break 'outer;
                                     }
                                     Ok(n) => {
@@ -371,7 +376,7 @@ async fn pty_main_loop(
                         }
                     }
 
-                    if flush_coalesce(&mut coalesce, &out_tx).await { break; }
+                    if flush_coalesce(&mut coalesce, &out_tx, &mut cmd_rx, &session).await { break; }
 
                     // A finished output burst is the cheapest signal that a
                     // command completed and the prompt was redrawn — the moment
@@ -383,8 +388,12 @@ async fn pty_main_loop(
             },
 
             // ── Keepalive ping (merged here — avoids a 4th task + ~64 KiB stack)
+            // A full queue means frames are already flowing, so the connection
+            // is alive; skip the ping rather than block keystrokes behind it.
             _ = ping_ticker.tick() => {
-                if out_tx.send(Message::Ping(Bytes::new())).await.is_err() { break; }
+                if let Err(mpsc::error::TrySendError::Closed(_)) = out_tx.try_send(Message::Ping(Bytes::new())) {
+                    break;
+                }
             },
         }
     }
@@ -398,14 +407,37 @@ async fn pty_main_loop(
 /// `Vec` allocation for the next coalesce window, avoiding a fresh 16 KiB
 /// allocation on every flush.
 ///
-/// Returns `true` if the outbound channel is closed (caller should stop).
-async fn flush_coalesce(coalesce: &mut BytesMut, tx: &mpsc::Sender<Message>) -> bool {
-    if coalesce.len() > 1 {
-        let payload = coalesce.split().freeze();
-        coalesce.reserve(MAX_COALESCE_SIZE + 1);
-        coalesce.extend_from_slice(&[MSG_OUTPUT]);
-        return tx.send(Message::Binary(payload)).await.is_err();
+/// While the outbound queue is full (client slower than the shell), keystrokes
+/// keep being applied so Ctrl+C reaches the shell without waiting for the
+/// backlog to drain.
+///
+/// Returns `true` if the session should stop (outbound channel closed, client
+/// gone, or PTY write failed).
+async fn flush_coalesce(
+    coalesce: &mut BytesMut,
+    tx:       &mpsc::Sender<Message>,
+    cmd_rx:   &mut mpsc::Receiver<PtyCmd>,
+    session:  &PtySession,
+) -> bool {
+    if coalesce.len() <= 1 {
+        return false;
     }
+    let permit = loop {
+        tokio::select! {
+            biased;
+            cmd = cmd_rx.recv() => {
+                if apply_cmd(cmd, session).await { return true; }
+            },
+            permit = tx.reserve() => match permit {
+                Ok(p)  => break p,
+                Err(_) => return true,
+            },
+        }
+    };
+    let payload = coalesce.split().freeze();
+    coalesce.reserve(MAX_COALESCE_SIZE + 1);
+    coalesce.extend_from_slice(&[MSG_OUTPUT]);
+    permit.send(Message::Binary(payload));
     false
 }
 

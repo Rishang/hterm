@@ -1,0 +1,17 @@
+diff --git a/lib/renderer.ts b/lib/renderer.ts
+index 9a68789..cfac423 100644
+--- a/lib/renderer.ts
++++ b/lib/renderer.ts
+@@ -683,7 +683,11 @@ export class CanvasRenderer {
+     // Render cursor (only if we're at the bottom, not scrolled)
+     if (viewportY === 0 && cursor.visible && this.cursorVisible) {
+       // Use cursor style from buffer if provided, otherwise use renderer default
+-      const cursorStyle = cursor.style ?? this.cursorStyle;
++      // hterm: the WASM terminal reports 'block' both for "no DECSCUSR" and an
++      // explicit block, so block means "use the configured cursorStyle" (as
++      // upstream 0.4.0 always did); apps can still request bar/underline.
++      const cursorStyle =
++        cursor.style && cursor.style !== 'block' ? cursor.style : this.cursorStyle;
+       this.renderCursor(cursor.x, cursor.y, cursorStyle);
+     }
+ 
