@@ -3,78 +3,21 @@ import { callTool } from "./toolsApi.js";
 /**
  * Project-wide content search.
  *
- * Runs through the existing `bash` tool rather than a dedicated endpoint — the
- * same trick `fileList.js` uses for the command palette. `rg` does the heavy
- * lifting (it honours .gitignore, skips binaries, and is orders of magnitude
- * faster than walking the tree in JS); `grep -r` is the fallback when ripgrep
- * isn't installed. The shell prints a mode marker first so the parser knows
- * which output format to expect.
+ * `/api/files/search` runs `rg` on the server (it honours .gitignore, skips
+ * binaries, and is far faster than walking the tree in JS), or `grep -r` when
+ * ripgrep isn't installed. Its body starts with a mode marker so the parser
+ * knows which output format to expect.
  */
 
-/** Hard caps keep broad queries from flooding the UI. */
+/** Hard caps keep broad queries from flooding the UI; the server returns one
+ * extra line so "exactly at the cap" differs from "more than the cap". */
 export const MAX_RESULT_LINES = 2000;
 export const MAX_SEARCH_HITS = 10000;
 const MAX_MATCHES_PER_LINE = 200;
 
-const EXCLUDED_DIRS = [
-  ".git", "node_modules", "bower_components", ".next", ".nuxt", ".svelte-kit", ".turbo", ".parcel-cache",
-  ".venv", "venv", "env", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".hypothesis", ".eggs", "__pypackages__",
-  "target", "dist", "build", "out", "coverage", ".gradle", ".dart_tool", ".build", "bin", "obj",
-  "vendor", ".bundle", "Pods", ".terraform", ".cache",
-];
-
-/** @param {string} s */
-function shq(s) {
-  return `'${String(s).replace(/'/g, "'\\''")}'`;
-}
-
-/** Split a comma/space separated glob list into individual patterns. */
-function globList(raw) {
-  return String(raw || "")
-    .split(/[,\s]+/)
-    .map(g => g.trim())
-    .filter(Boolean);
-}
-
 /**
  * @typedef {{ caseSensitive?: boolean, wholeWord?: boolean, regexp?: boolean, include?: string, exclude?: string }} SearchOptions
  */
-
-/**
- * Build the shell command for one search.
- * @param {string} query @param {string} root @param {SearchOptions} opts
- */
-export function buildSearchCommand(query, root, opts = {}) {
-  const { caseSensitive = false, wholeWord = false, regexp = false, include = "", exclude = "" } = opts;
-  const includes = globList(include);
-  const excludes = globList(exclude);
-
-  const rg = ["rg", "--line-number", "--column", "--no-heading", "--color", "never", "--hidden"];
-  for (const dir of EXCLUDED_DIRS) rg.push("--glob", shq(`!**/${dir}/**`));
-  rg.push(caseSensitive ? "--case-sensitive" : "--ignore-case");
-  if (wholeWord) rg.push("--word-regexp");
-  if (!regexp) rg.push("--fixed-strings");
-  for (const g of includes) rg.push("--glob", shq(g));
-  for (const g of excludes) rg.push("--glob", shq(`!${g}`));
-  rg.push("--regexp", shq(query), shq(root));
-
-  // grep can't report columns, so the parser falls back to column 1 for it.
-  const grep = ["grep", "-rnI", "--binary-files=without-match"];
-  for (const dir of EXCLUDED_DIRS) grep.push(`--exclude-dir=${shq(dir)}`);
-  if (!caseSensitive) grep.push("-i"); // grep is case-sensitive by default
-  if (wholeWord) grep.push("-w");
-  grep.push(regexp ? "-E" : "-F");
-  for (const g of includes) grep.push(`--include=${shq(g)}`);
-  for (const g of excludes) grep.push(`--exclude=${shq(g)}`);
-  grep.push("-e", shq(query), shq(root));
-
-  return (
-    `if command -v rg >/dev/null 2>&1; then echo __RG__; ${rg.join(" ")}; ` +
-    // +2 = the mode marker line, plus one extra result line that exists purely
-    // so the parser can tell "exactly at the cap" from "more than the cap".
-    `else echo __GREP__; ${grep.join(" ")}; fi 2>/dev/null | head -n ${MAX_RESULT_LINES + 2}`
-  );
-}
 
 /**
  * The regex the whole module matches with. Literal queries are escaped so they
@@ -133,8 +76,7 @@ export function lineMatches(text, query, opts = {}) {
  * @returns {{ hits: SearchHit[], truncated: boolean }}
  */
 export function parseSearchOutput(raw, query, opts = {}) {
-  const stdout = String(raw || "").split("\n--- stderr ---\n")[0];
-  const lines = stdout.split("\n");
+  const lines = String(raw || "").split("\n");
   const modeIdx = lines.findIndex(l => l.trim() === "__RG__" || l.trim() === "__GREP__");
   const hasColumn = modeIdx !== -1 && lines[modeIdx].trim() === "__RG__";
   const body = lines.slice(modeIdx + 1);
@@ -184,10 +126,14 @@ export async function runSearch(basePath, query, root, opts = {}) {
   if (opts.regexp && !buildMatchRegex(query, opts, "")) {
     throw new Error("Invalid regular expression");
   }
-  // Exit 1 means no match; 141 means `head` reached the result cap and closed
-  // the pipe. Both still yield usable search results.
-  const command = `${buildSearchCommand(query, root, opts)}; status=\${PIPESTATUS[0]}; test "$status" -le 1 -o "$status" -eq 141`;
-  const text = await callTool(basePath, "bash", { command });
+  const { caseSensitive = false, wholeWord = false, regexp = false, include = "", exclude = "" } = opts;
+  const params = new URLSearchParams({
+    query, root, include, exclude,
+    case_sensitive: String(caseSensitive), whole_word: String(wholeWord), regexp: String(regexp),
+  });
+  const res = await fetch(`${basePath}/api/files/search?${params}`);
+  const text = await res.text();
+  if (!res.ok) throw new Error(text || `Search failed: ${res.status}`);
   return parseSearchOutput(text, query, opts);
 }
 

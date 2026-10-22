@@ -13,11 +13,11 @@ use crate::config::AppConfig;
 use crate::pty::PtySession;
 
 // ── Binary protocol constants (must match TermTab.svelte) ─────────────────────
-const MSG_INPUT:  u8 = 0;   // client → server: keystroke data
-const MSG_OUTPUT: u8 = 1;   // server → client: PTY output
-const MSG_RESIZE: u8 = 2;   // client → server: terminal resize (cols u16 BE, rows u16 BE)
-// 3 is reserved for the error frame the browser renders inline.
-const MSG_CWD:    u8 = 4;   // server → client: shell working directory (UTF-8 path)
+const MSG_INPUT: u8 = 0; // client → server: keystroke data
+const MSG_OUTPUT: u8 = 1; // server → client: PTY output
+const MSG_RESIZE: u8 = 2; // client → server: terminal resize (cols u16 BE, rows u16 BE)
+                          // 3 is reserved for the error frame the browser renders inline.
+const MSG_CWD: u8 = 4; // server → client: shell working directory (UTF-8 path)
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 
@@ -64,7 +64,8 @@ pub struct AppState {
     /// Uses a `std::sync::RwLock` because the lock is never held across `.await`
     /// points — only quick insert/remove/lookup operations.  This avoids the
     /// overhead of tokio's async lock machinery.
-    pub mcp_transmitters: std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<axum::response::sse::Event>>>,
+    pub mcp_transmitters:
+        std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<axum::response::sse::Event>>>,
 
     /// Active file-explorer watch sessions, mapping session id to the channel
     /// that updates which directories that session watches. Removing an entry
@@ -95,10 +96,10 @@ enum PtyCmd {
 /// URL query parameters of the form `?arg=foo&arg=bar` are extracted here and
 /// forwarded to the shell's argv when `url_arg` is enabled in config.
 pub async fn ws_handler(
-    ws:              WebSocketUpgrade,
+    ws: WebSocketUpgrade,
     RawQuery(query): RawQuery,
-    headers:         HeaderMap,
-    State(state):    State<Arc<AppState>>,
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let cfg = &state.config;
 
@@ -148,7 +149,7 @@ pub async fn ws_handler(
     // ── Origin check ──────────────────────────────────────────────────────────
     if cfg.check_origin {
         let origin = headers.get("origin").and_then(|v| v.to_str().ok());
-        let host   = headers.get("host").and_then(|v| v.to_str().ok());
+        let host = headers.get("host").and_then(|v| v.to_str().ok());
         if let (Some(o), Some(h)) = (origin, host) {
             // Strip scheme from Origin ("https://host:port" → "host:port") before
             // comparing so that substrings like "evil-app.com" can't spoof "app".
@@ -166,14 +167,9 @@ pub async fn ws_handler(
     //
     // Example: `ws://host/ws?arg=-c&arg=ls%20-la`
     //   → execve("/bin/bash", ["/bin/bash", "-c", "ls -la"], env)
-    let url_args: Vec<String> = if cfg.url_arg {
-        parse_url_args(query.as_deref().unwrap_or(""))
-    } else {
-        vec![]
-    };
+    let url_args: Vec<String> = if cfg.url_arg { parse_url_args(query.as_deref().unwrap_or("")) } else { vec![] };
 
-    ws.on_upgrade(move |socket| handle_socket(socket, state, url_args))
-        .into_response()
+    ws.on_upgrade(move |socket| handle_socket(socket, state, url_args)).into_response()
 }
 
 // ── Session handler ───────────────────────────────────────────────────────────
@@ -191,9 +187,9 @@ pub async fn ws_handler(
 /// `pty_main` owns the `PtySession` value directly — no `Arc` overhead.
 /// Pings are merged into `pty_main` via `select!` to avoid a 4th task.
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<String>) {
-    let cfg           = &state.config;
+    let cfg = &state.config;
     let ping_interval = Duration::from_secs(cfg.ping_interval);
-    let writable      = cfg.writable;
+    let writable = cfg.writable;
 
     // Count was already incremented in ws_handler, just read it for logging
     let count = state.client_count.load(std::sync::atomic::Ordering::Relaxed);
@@ -204,15 +200,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
         "Terminal session started"
     );
 
-    let session = match PtySession::spawn(
-        &cfg.shell,
-        &url_args,
-        &cfg.cwd,
-        &cfg.terminal_type,
-        cfg.uid,
-        cfg.gid,
-    ) {
-        Ok(s)  => s,
+    let session = match PtySession::spawn(&cfg.shell, &url_args, &cfg.cwd, &cfg.terminal_type, cfg.uid, cfg.gid) {
+        Ok(s) => s,
         Err(e) => {
             tracing::error!("PTY spawn failed: {}", e);
             state.client_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -225,7 +214,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
     // Outbound channel: pty_main → writer → ws_sink
     let (out_tx, mut out_rx) = mpsc::channel::<Message>(WS_OUT_CAP);
     // Inbound command channel: ws_reader → pty_main
-    let (cmd_tx, cmd_rx)     = mpsc::channel::<PtyCmd>(PTY_CMD_CAP);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<PtyCmd>(PTY_CMD_CAP);
 
     // ── Writer: owns ws_sink exclusively — zero lock contention ──────────────
     let writer = tokio::spawn(async move {
@@ -239,12 +228,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
     });
 
     // ── PTY main: owns PtySession, coalesces output, handles cmds + pings ────
-    let mut pty_main = tokio::spawn(pty_main_loop(
-        session,
-        cmd_rx,
-        out_tx.clone(),
-        ping_interval,
-    ));
+    let mut pty_main = tokio::spawn(pty_main_loop(session, cmd_rx, out_tx.clone(), ping_interval));
 
     // ── WS reader: minimal work — parse frames, forward PtyCmd ───────────────
     let mut ws_reader = tokio::spawn(async move {
@@ -306,9 +290,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
 /// 16 KiB per frame), handles incoming keystrokes/resize commands, and sends
 /// WebSocket keepalive pings — all in a single task.
 async fn pty_main_loop(
-    session:       PtySession,
-    mut cmd_rx:    mpsc::Receiver<PtyCmd>,
-    out_tx:        mpsc::Sender<Message>,
+    session: PtySession,
+    mut cmd_rx: mpsc::Receiver<PtyCmd>,
+    out_tx: mpsc::Sender<Message>,
     ping_interval: Duration,
 ) {
     let mut buf = [0u8; PTY_BUF_SIZE];
@@ -328,7 +312,9 @@ async fn pty_main_loop(
     // where the shell started, then only when the path actually changes.
     let mut last_cwd = String::new();
     if let Some(msg) = cwd_frame(&session, &mut last_cwd) {
-        if out_tx.send(msg).await.is_err() { return; }
+        if out_tx.send(msg).await.is_err() {
+            return;
+        }
     }
 
     'outer: loop {
@@ -415,9 +401,9 @@ async fn pty_main_loop(
 /// gone, or PTY write failed).
 async fn flush_coalesce(
     coalesce: &mut BytesMut,
-    tx:       &mpsc::Sender<Message>,
-    cmd_rx:   &mut mpsc::Receiver<PtyCmd>,
-    session:  &PtySession,
+    tx: &mpsc::Sender<Message>,
+    cmd_rx: &mut mpsc::Receiver<PtyCmd>,
+    session: &PtySession,
 ) -> bool {
     if coalesce.len() <= 1 {
         return false;
@@ -487,11 +473,7 @@ async fn apply_cmd(cmd: Option<PtyCmd>, session: &PtySession) -> bool {
 /// startup — this function performs a single string comparison with no
 /// allocations or decoding.
 pub fn check_basic_auth(headers: &HeaderMap, expected: &str) -> bool {
-    headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v == expected)
-        .unwrap_or(false)
+    headers.get("authorization").and_then(|v| v.to_str().ok()).map(|v| v == expected).unwrap_or(false)
 }
 
 /// Parse `?arg=<value>&arg=<value>` pairs from a raw query string.
@@ -510,7 +492,11 @@ fn parse_url_args(query: &str) -> Vec<String> {
         .split('&')
         .filter_map(|pair| {
             let (key, val) = pair.split_once('=')?;
-            if key == "arg" { Some(percent_decode(val)) } else { None }
+            if key == "arg" {
+                Some(percent_decode(val))
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -522,7 +508,10 @@ fn percent_decode(input: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'+' => { out.push(b' '); i += 1; }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
             b'%' if i + 2 < bytes.len() => {
                 if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
                     out.push((hi << 4) | lo);
@@ -532,7 +521,10 @@ fn percent_decode(input: &str) -> String {
                     i += 1;
                 }
             }
-            b => { out.push(b); i += 1; }
+            b => {
+                out.push(b);
+                i += 1;
+            }
         }
     }
     String::from_utf8_lossy(&out).into_owned()
@@ -544,6 +536,6 @@ fn hex_val(b: u8) -> Option<u8> {
         b'0'..=b'9' => Some(b - b'0'),
         b'a'..=b'f' => Some(b - b'a' + 10),
         b'A'..=b'F' => Some(b - b'A' + 10),
-        _            => None,
+        _ => None,
     }
 }

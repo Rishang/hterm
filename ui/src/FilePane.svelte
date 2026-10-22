@@ -4,6 +4,7 @@
   import { callTool } from "./toolsApi.js";
   import { lspLanguageForPath, lspServerForLanguage } from "./autocomplete/lsp.js";
   import { marked } from "marked";
+  import { isImage } from "./fileIcon.js";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
 
@@ -20,10 +21,11 @@
   const isSvg = (path) => /\.svg$/i.test(path);
   // Rendered through <img>, which never runs scripts embedded in the SVG.
   const svgDataUrl = (svg) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  const rawUrl = (path) => `${basePath}/api/files/download?path=${encodeURIComponent(path)}`;
 
   // Relative image paths in markdown point at files beside the .md, not at the
-  // hterm page. SVG is text, so load it through the file API as a data URL.
-  // ponytail: SVG only; raster images need a raw-bytes file endpoint.
+  // hterm page. SVG is text, so load it through the file API as a data URL;
+  // raster images load their raw bytes.
   $effect(() => {
     const source = tab?.preview ? tab.editContent : null;
     if (!mdPreviewEl || source == null) return;
@@ -31,8 +33,10 @@
     let cancelled = false;
     for (const img of mdPreviewEl.querySelectorAll("img[src]")) {
       const src = img.getAttribute("src");
-      if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(src) || !/\.svg([?#]|$)/i.test(src)) continue;
+      if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(src)) continue;
       const path = decodeURIComponent(new URL(src, `file://${dir}`).pathname);
+      if (isImage(path)) { img.src = rawUrl(path); continue; }
+      if (!isSvg(path)) continue;
       fetch(`${basePath}/api/files/read?path=${encodeURIComponent(path)}`)
         .then((res) => (res.ok ? res.json() : null))
         .then((file) => { if (!cancelled && file && !file.is_binary) img.src = svgDataUrl(file.content); })
@@ -169,6 +173,8 @@
     <div class="fm-loading">Loading...</div>
   {:else if tab.error}
     <div class="fm-error fm-error-main">{tab.error}</div>
+  {:else if tab.isBinary && isImage(tab.path)}
+    <div class="fm-svg-preview fm-raster-preview"><img alt={tab.name} src={rawUrl(tab.path)} /></div>
   {:else if tab.isBinary}
     <div class="fm-binary">
       <span class="fm-binary-icon">⬡</span>

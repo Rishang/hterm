@@ -1,6 +1,6 @@
 [package]
 name        = "hterm"
-version     = "0.1.0"
+version     = "0.4.0"
 edition     = "2021"
 description = "Share your terminal over the web"
 
@@ -8,22 +8,25 @@ description = "Share your terminal over the web"
 # axum-server provides real TLS via rustls — no OpenSSL dependency required.
 axum        = { version = "0.8.9", features = ["ws"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
-tokio       = { version = "1.53.1", features = ["rt", "macros", "net", "sync", "time", "io-util", "io-std", "fs", "signal", "process"] }
+tokio       = { version = "1.54.1", features = ["rt", "macros", "net", "sync", "time", "io-util", "io-std", "fs", "signal", "process"] }
 bytes       = "1.12.1"                       # zero-copy slices; used directly in ws.rs
 serde       = { version = "1.0.229", features = ["derive"] }
-serde_json  = "1.0.151"
+serde_json  = "1.0.154"
 serde_yaml  = "0.9.34"
-clap        = { version = "4.6.6", features = ["derive"] }
+clap        = { version = "4.6.7", features = ["derive"] }
 # "user" adds nix::unistd::{setuid, setgid, Uid, Gid} for privilege drop.
 # "inotify" backs the file-explorer change watcher — kernel-driven, so no polling.
 nix         = { version = "0.31.3", features = ["term", "process", "signal", "user", "inotify"] }
 tracing     = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-futures     = "0.3.33"
-rust-embed  = { version = "8.12.0", features = ["mime-guess"] }
+futures     = "0.3.34"
+rust-embed  = { version = "8.13.0", features = ["mime-guess"] }
 mime_guess  = "2.0.5"
-uuid = { version = "1.24.0", default-features = false, features = ["v4"] }
+uuid = { version = "1.28.0", default-features = false, features = ["v4"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
+base64 = "0.23.1"                  # binary payloads for the download/upload MCP tools
+# Folder downloads stream as zip archives; the pure-Rust deflate backend keeps the build free of C deps.
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [profile.release]
 opt-level     = "z"     # optimise for binary size

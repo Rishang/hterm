@@ -91,9 +91,7 @@ impl Stream for SessionStream {
     type Item = Result<Event, Infallible>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner)
-            .poll_next(cx)
-            .map(|opt| opt.map(Ok))
+        Pin::new(&mut self.inner).poll_next(cx).map(|opt| opt.map(Ok))
     }
 }
 
@@ -128,11 +126,7 @@ pub async fn mcp_sse_handler(
     // Bounded channel: caps memory when the SSE client is slow or stalled.
     let (tx, rx) = mpsc::channel(64);
 
-    state
-        .mcp_transmitters
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session_id.clone(), tx.clone());
+    state.mcp_transmitters.write().unwrap_or_else(|e| e.into_inner()).insert(session_id.clone(), tx.clone());
 
     // Tell the client where to POST messages.
     let bp = &state.config.base_path;
@@ -142,11 +136,7 @@ pub async fn mcp_sse_handler(
     tracing::info!(session_id = %session_id, "MCP session opened");
 
     // SessionStream cleans up the transmitters entry when the SSE stream is dropped.
-    let stream = SessionStream {
-        inner: ReceiverStream::new(rx),
-        session_id,
-        state: Arc::clone(&state),
-    };
+    let stream = SessionStream { inner: ReceiverStream::new(rx), session_id, state: Arc::clone(&state) };
 
     Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().text("ping")))
 }
@@ -162,8 +152,7 @@ pub async fn mcp_message_handler(
     }
 
     let tx = {
-        let transmitters = state.mcp_transmitters.read()
-            .unwrap_or_else(|e| e.into_inner());
+        let transmitters = state.mcp_transmitters.read().unwrap_or_else(|e| e.into_inner());
         match transmitters.get(&query.session_id) {
             Some(tx) => tx.clone(),
             None => return axum::http::StatusCode::NOT_FOUND.into_response(),
@@ -203,27 +192,16 @@ pub async fn mcp_message_handler(
                 "resources/list" => Ok(json!({ "resources": [] })),
                 "prompts/list" => Ok(json!({ "prompts": [] })),
                 "ping" => Ok(json!({})),
-                other => Err(RpcError {
-                    code: METHOD_NOT_FOUND,
-                    message: format!("Method not found: {}", other),
-                }),
+                other => Err(RpcError { code: METHOD_NOT_FOUND, message: format!("Method not found: {}", other) }),
             };
 
             match result {
                 Ok(res) => {
-                    let resp = JsonRpcResponse {
-                        jsonrpc: "2.0",
-                        id: &id_value,
-                        result: res,
-                    };
+                    let resp = JsonRpcResponse { jsonrpc: "2.0", id: &id_value, result: res };
                     serde_json::to_string(&resp).unwrap_or_default()
                 }
                 Err(e) => {
-                    let resp = JsonRpcError {
-                        jsonrpc: "2.0",
-                        id: &id_value,
-                        error: e,
-                    };
+                    let resp = JsonRpcError { jsonrpc: "2.0", id: &id_value, error: e };
                     serde_json::to_string(&resp).unwrap_or_default()
                 }
             }
@@ -240,16 +218,8 @@ pub async fn mcp_message_handler(
 // ── Method handlers ───────────────────────────────────────────────────────────
 
 fn handle_initialize(params: &Value) -> Value {
-    let client_name = params
-        .get("clientInfo")
-        .and_then(|c| c.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let client_version = params
-        .get("clientInfo")
-        .and_then(|c| c.get("version"))
-        .and_then(Value::as_str)
-        .unwrap_or("?");
+    let client_name = params.get("clientInfo").and_then(|c| c.get("name")).and_then(Value::as_str).unwrap_or("unknown");
+    let client_version = params.get("clientInfo").and_then(|c| c.get("version")).and_then(Value::as_str).unwrap_or("?");
     tracing::info!(client = %client_name, version = %client_version, "MCP client initialized");
 
     json!({
@@ -275,26 +245,17 @@ fn serialize_success_raw(id: &Value, result_json: &str) -> String {
     out
 }
 
-
-
 // ── tools/call dispatcher ─────────────────────────────────────────────────────
 
 async fn handle_tools_call(params: &Value, cfg: &AppConfig) -> Result<Value, RpcError> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| RpcError {
-            code: INVALID_PARAMS,
-            message: "Missing required field: name".into(),
-        })?;
+        .ok_or_else(|| RpcError { code: INVALID_PARAMS, message: "Missing required field: name".into() })?;
 
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
 
     tracing::info!(tool = %name, "MCP tools/call");
 
-    crate::tools::call_tool(name, arguments, cfg).await.map_err(|e| RpcError {
-        code: INVALID_PARAMS,
-        message: e,
-    })
+    crate::tools::call_tool(name, arguments, cfg).await.map_err(|e| RpcError { code: INVALID_PARAMS, message: e })
 }
-

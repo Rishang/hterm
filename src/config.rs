@@ -20,7 +20,6 @@ pub struct ThemeConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     // ── Network ───────────────────────────────────────────────────────────────
-
     /// TCP port to listen on (default: 7681, 0 = random).
     #[serde(default = "default_port")]
     pub port: u16,
@@ -37,7 +36,6 @@ pub struct AppConfig {
     pub unix_socket: String,
 
     // ── Shell ─────────────────────────────────────────────────────────────────
-
     /// Shell executable (default: `$SHELL` or `/bin/bash`).
     #[serde(default = "default_shell")]
     pub shell: String,
@@ -51,8 +49,7 @@ pub struct AppConfig {
     pub terminal_type: String,
 
     // ── Access control ────────────────────────────────────────────────────────
-
-    /// Allow clients to write keystrokes to the TTY (read-only by default for
+    /// Allow terminal input, file writes and command execution (read-only by default for
     /// safety, matching ttyd's `-W` / `--writable` convention).
     #[serde(default)]
     pub writable: bool,
@@ -87,8 +84,13 @@ pub struct AppConfig {
     #[serde(default)]
     pub auth_header: String,
 
-    // ── Reverse-proxy / routing ───────────────────────────────────────────────
+    /// Extra `Host` names accepted when no auth is configured. Loopback names
+    /// and IP literals are always accepted; any other name is refused to block
+    /// DNS rebinding (see `tools::host_allowed`).
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
 
+    // ── Reverse-proxy / routing ───────────────────────────────────────────────
     /// URL prefix for reverse-proxy deployments (e.g. `/terminal`).
     #[serde(default)]
     pub base_path: String,
@@ -98,7 +100,6 @@ pub struct AppConfig {
     pub index_path: String,
 
     // ── Behaviour ─────────────────────────────────────────────────────────────
-
     /// Allow clients to append extra shell arguments via the WebSocket URL's
     /// query string (e.g. `ws://host/ws?arg=-c&arg=ls`).
     ///
@@ -113,7 +114,6 @@ pub struct AppConfig {
     pub ping_interval: u64,
 
     // ── Privilege drop ────────────────────────────────────────────────────────
-
     /// Drop to this numeric user ID **in each spawned shell child**.
     /// The server process itself keeps its original UID so it can accept
     /// new connections and bind to the configured port.
@@ -126,7 +126,6 @@ pub struct AppConfig {
     pub gid: Option<u32>,
 
     // ── TLS ───────────────────────────────────────────────────────────────────
-
     /// Enable TLS.  Requires `ssl_cert` and `ssl_key`.
     #[serde(default)]
     pub ssl: bool,
@@ -141,12 +140,18 @@ pub struct AppConfig {
     pub theme: ThemeConfig,
 }
 
+#[rustfmt::skip]
 fn default_port()          -> u16    { 7681 }
+#[rustfmt::skip]
 fn default_host()          -> String { "127.0.0.1".into() }
+#[rustfmt::skip]
 fn default_shell()         -> String { std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into()) }
+#[rustfmt::skip]
 fn default_terminal_type() -> String { "xterm-256color".into() }
+#[rustfmt::skip]
 fn default_ping_interval() -> u64    { 5 }
 
+#[rustfmt::skip] // aligned defaults table
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -163,6 +168,7 @@ impl Default for AppConfig {
             check_origin:  false,
             credential:    String::new(),
             auth_header:   String::new(),
+            allowed_hosts: Vec::new(),
             base_path:     String::new(),
             index_path:    String::new(),
             url_arg:       false,
@@ -181,13 +187,21 @@ impl AppConfig {
     /// Load from a JSON file, falling back to [`Default`] for any missing field.
     pub fn load(path: &str) -> Self {
         let p = Path::new(path);
-        if !p.exists() { return Self::default(); }
+        if !p.exists() {
+            return Self::default();
+        }
         match fs::read_to_string(p) {
-            Ok(data)  => match serde_json::from_str(&data) {
+            Ok(data) => match serde_json::from_str(&data) {
                 Ok(cfg) => cfg,
-                Err(e)  => { tracing::warn!("Cannot parse {}: {}", path, e); Self::default() }
+                Err(e) => {
+                    tracing::warn!("Cannot parse {}: {}", path, e);
+                    Self::default()
+                }
             },
-            Err(e) => { tracing::warn!("Cannot read {}: {}", path, e); Self::default() }
+            Err(e) => {
+                tracing::warn!("Cannot read {}: {}", path, e);
+                Self::default()
+            }
         }
     }
 }
@@ -197,6 +211,7 @@ impl AppConfig {
 /// Only the fields the browser needs are included.
 /// Secrets (credentials, key file paths) are never sent to the client.
 #[derive(Serialize)]
+#[rustfmt::skip]
 pub struct ConfigResponse {
     pub theme:    ThemeConfig,
     pub writable: bool,

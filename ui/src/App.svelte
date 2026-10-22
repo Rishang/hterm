@@ -6,7 +6,7 @@
   import SettingsWindow from "./SettingsWindow.svelte";
   import CommandPalette from "./CommandPalette.svelte";
   import GlobalSearch from "./GlobalSearch.svelte";
-  import { fileIcon } from "./fileIcon.js";
+  import { fileIcon, isImage } from "./fileIcon.js";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
   const LSP_SETTINGS_KEY = "hterm.lspServers";
@@ -118,6 +118,10 @@
   async function openFileByPath(path) {
     if (fileTabs.find(t => t.id === path)) {
       openFileTab(path, "", false, "");
+      return;
+    }
+    if (isImage(path)) {
+      openFileTab(path, "", true, "");
       return;
     }
     openFileTab(path, "", false, "", true);

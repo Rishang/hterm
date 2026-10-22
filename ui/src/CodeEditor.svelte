@@ -116,6 +116,7 @@
   import { autocompletion, completeAnyWord } from "@codemirror/autocomplete";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { showMinimap } from "@replit/codemirror-minimap";
+  import { indentationMarkers } from "@replit/codemirror-indentation-markers";
   import FindBar from "./FindBar.svelte";
   import { dockerCompletionSource, isDockerAutocompleteFile } from "./autocomplete/docker.js";
   import { goTemplateCompletionSource, isGoTemplateFile } from "./autocomplete/gotemplate.js";
@@ -276,6 +277,13 @@
       highlightActiveLine(),
       highlightActiveLineGutter(),
       foldGutter(),
+      // Faint guide per indent level; the block holding the cursor is brighter.
+      indentationMarkers({
+        colors: {
+          light: "var(--indent-guide)", dark: "var(--indent-guide)",
+          activeLight: "var(--indent-guide-active)", activeDark: "var(--indent-guide-active)",
+        },
+      }),
       EditorView.lineWrapping,
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       EditorState.languageData.of(() => completionData),
