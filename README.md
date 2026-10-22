@@ -51,8 +51,8 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 - Reverse proxy authentication
 - Read-only mode by default (no input, writes or command execution)
 - TLS/SSL support
-- Origin checking
-- DNS-rebinding guard: without auth, only loopback, IP and `--allowed-host` names are served
+- Cross-origin WebSocket upgrades are always refused (`Origin` must match `Host` or an `--allowed-host`)
+- DNS-rebinding guard: without Basic auth, only loopback, IP and `--allowed-host` names are served
 
 ### 🤖 **AI Integration**
 - **MCP Server** built-in
@@ -141,8 +141,10 @@ hterm -H :: -p 7681 -W
 # HTTP Basic Auth
 hterm -W -c myuser:mypassword
 
-# Reverse proxy auth (Nginx, Caddy, etc.)
-hterm -W -A X-Remote-User
+# Reverse proxy auth (Nginx, Caddy, etc.). Bind where only the proxy can reach
+# hterm, have the proxy strip client copies of the header, and allow the public
+# Host name it forwards.
+hterm -W -A X-Remote-User --allowed-host term.example.com
 
 # With TLS
 hterm -W -c admin:pass --ssl --ssl-cert server.crt --ssl-key server.key
@@ -461,11 +463,11 @@ OPTIONS:
     -m, --max-clients <N>          Max concurrent clients [default: 0 = unlimited]
     -o, --once                     Accept one client and exit
     -q, --exit-no-conn             Exit when last client disconnects
-    -O, --check-origin             Reject different origin WebSocket upgrades
+    -O, --check-origin             Also refuse WebSocket upgrades without an Origin header
     -c, --credential <USER:PASS>   HTTP Basic Auth
-    -A, --auth-header <HEADER>     Reverse proxy auth header name
-        --allowed-host <HOST>      Serve this Host name without auth (repeatable)
-    -a, --url-arg                  Allow URL query arguments
+    -A, --auth-header <HEADER>     Reverse proxy auth header name (Host guard stays on)
+        --allowed-host <HOST>      Serve this Host name without Basic auth (repeatable)
+    -a, --url-arg                  Allow URL query arguments (needs --writable)
 
     # Routing
     -b, --base-path <PATH>         URL prefix for reverse proxy

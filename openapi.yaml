@@ -15,14 +15,18 @@ info:
        - Header: `Authorization: Basic <base64(username:password)>`
 
     2. **Reverse Proxy Auth**: Set via `--auth-header X-Remote-User` flag
-       - Header: `X-Remote-User: <username>` (or custom header name)
+       - Header: `X-Remote-User: <username>` (or custom header name); a blank value is refused
+       - Any client that reaches the port can send this header. Bind hterm where only the proxy
+         can reach it (loopback or `--interface`), and have the proxy strip client copies.
 
-    If neither is configured, authentication is disabled, and every route (including static
-    assets) answers 403 unless the `Host` header is a loopback name (`localhost`, `*.localhost`),
-    an IP address, the bind host, or a name passed with `--allowed-host`. This blocks DNS
-    rebinding, where a website points its own name at this server to call the API.
+    Without Basic Auth, every route (including static assets) answers 403 unless the `Host`
+    header is a loopback name (`localhost`, `*.localhost`), an IP address, the bind host, or a
+    name passed with `--allowed-host`. This blocks DNS rebinding, where a website points its own
+    name at this server to call the API. Proxy auth keeps this guard on, so pass the public name
+    the proxy forwards with `--allowed-host`.
 
-    Without `--writable`, `/api/exec` and the `bash` tool are refused along with file writes.
+    Without `--writable`, `/api/exec`, the `bash` tool and `--url-arg` are refused along with
+    file writes.
 
     ## Base Path
 
@@ -63,9 +67,15 @@ paths:
         When `--credential` is set, an unauthenticated request gets a `401`
         with a `WWW-Authenticate` header, which triggers the browser's
         native Basic Auth login prompt. When `--auth-header` is set instead,
-        a missing header also yields `401`, but without that challenge
+        a missing or blank header also yields `401`, but without that challenge
         header, since that credential is expected to be injected by an
         upstream proxy rather than typed by a user.
+
+        The embedded page is sent with `Content-Security-Policy: script-src 'self'
+        'wasm-unsafe-eval'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'`,
+        so previewed files cannot run scripts and other sites cannot frame the
+        terminal. A custom `--index` page may need inline scripts, so it only gets
+        `frame-ancestors 'self'`.
       tags:
         - assets
       security:
@@ -74,6 +84,11 @@ paths:
       responses:
         '200':
           description: HTML page
+          headers:
+            Content-Security-Policy:
+              description: Script and framing restrictions (see above)
+              schema:
+                type: string
           content:
             text/html:
               schema:
@@ -305,7 +320,7 @@ paths:
           Sent when available after the session starts and after output flushes only
           when the shell directory changes; clients must treat it as a control frame.
 
-        **Query Parameters** (if `url_arg` enabled):
+        **Query Parameters** (if `url_arg` and `writable` are enabled):
         - `arg`: Repeated parameter for shell arguments (e.g., `?arg=-c&arg=ls`)
       tags:
         - terminal
@@ -315,7 +330,7 @@ paths:
       parameters:
         - name: arg
           in: query
-          description: Shell argument (requires --url-arg flag)
+          description: Shell argument (requires --url-arg and --writable)
           schema:
             type: string
           style: form
@@ -325,6 +340,10 @@ paths:
           description: WebSocket upgrade successful
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            Cross-origin upgrade. A present `Origin` must match `Host` or name an
+            `--allowed-host`; with `--check-origin`, a missing `Origin` is refused too.
         '503':
           description: Max clients reached or --once mode active
 
@@ -1139,7 +1158,7 @@ components:
           description: Whether terminal is writable
         url_arg:
           type: boolean
-          description: Allow URL query arguments
+          description: Allow URL query arguments (always false without `writable`)
         cwd:
           type: string
           description: Working directory (file manager root)
@@ -1469,4 +1488,4 @@ components:
       name: X-Remote-User
       description: |
         Reverse proxy authentication header (configured with --auth-header).
-        Header name is customizable via CLI flag.
+        Header name is customizable via CLI flag. A blank value is refused.

@@ -72,7 +72,7 @@ Do not hold `AppState` standard locks across `.await`. Use bounded channels, cap
 
 ```rust
 tracing::info!(tool = cmd_name, success = ok, "command finished");
-tracing::warn!(origin = o, host = h, "WebSocket upgrade rejected: origin mismatch");
+tracing::warn!(origin, host, "WebSocket upgrade rejected: origin mismatch");
 ```
 
 ### Configuration and dependencies

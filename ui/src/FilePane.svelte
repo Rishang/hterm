@@ -4,6 +4,7 @@
   import { callTool } from "./toolsApi.js";
   import { lspLanguageForPath, lspServerForLanguage } from "./autocomplete/lsp.js";
   import { marked } from "marked";
+  import DOMPurify from "dompurify";
   import { isImage } from "./fileIcon.js";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
@@ -21,6 +22,13 @@
   const isSvg = (path) => /\.svg$/i.test(path);
   // Rendered through <img>, which never runs scripts embedded in the SVG.
   const svgDataUrl = (svg) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  // Previewed markdown is untrusted (any cloned README) and renders same-origin
+  // with the user's credentials, so marked's raw-HTML passthrough must not run
+  // scripts: DOMPurify strips handlers and javascript: URLs. <style>, <form> and
+  // style attributes are dropped too so a document cannot restyle the app or
+  // cover it with a full-screen link. <input> stays for GFM task-list checkboxes.
+  const renderMarkdown = (source) =>
+    DOMPurify.sanitize(marked.parse(source), { FORBID_TAGS: ["style", "form"], FORBID_ATTR: ["style"] });
   const rawUrl = (path) => `${basePath}/api/files/download?path=${encodeURIComponent(path)}`;
 
   // Relative image paths in markdown point at files beside the .md, not at the
@@ -189,7 +197,7 @@
         <div class="fm-svg-preview"><img alt={tab.name} src={svgDataUrl(tab.editContent)} /></div>
       {:else}
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-        <div class="fm-md-preview" bind:this={mdPreviewEl}>{@html marked(tab.editContent)}</div>
+        <div class="fm-md-preview" bind:this={mdPreviewEl}>{@html renderMarkdown(tab.editContent)}</div>
       {/if}
     {:else}
       {#key tab.id + tab.langOverride}

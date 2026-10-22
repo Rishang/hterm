@@ -170,7 +170,7 @@ pub fn handle_tools_list_json() -> &'static str {
 pub fn check_auth(state: &AppState, headers: &HeaderMap) -> bool {
     let cfg = &state.config;
     if !cfg.auth_header.is_empty() {
-        headers.get(cfg.auth_header.as_str()).is_some()
+        proxy_user_present(cfg, headers)
     } else if let Some(ref expected) = state.expected_auth {
         crate::ws::check_basic_auth(headers, expected)
     } else {
@@ -178,14 +178,30 @@ pub fn check_auth(state: &AppState, headers: &HeaderMap) -> bool {
     }
 }
 
-/// DNS-rebinding guard. With no auth configured, any website could point its
-/// own DNS name at this server and call the API as a same-origin page. Such a
-/// page can only reach us under a DNS name it controls, so without auth only
-/// loopback names, IP literals, the bind host, and `allowed_hosts` pass.
+/// Proxy-auth check: the `auth_header` must carry a non-blank user. An empty
+/// value is what a misconfigured proxy forwards for an anonymous request, so
+/// it never counts as authenticated.
+fn proxy_user_present(cfg: &AppConfig, headers: &HeaderMap) -> bool {
+    headers.get(cfg.auth_header.as_str()).is_some_and(|v| !v.as_bytes().trim_ascii().is_empty())
+}
+
+/// The request's Host: the `Host` header, or the URI authority for HTTP/2
+/// (which carries `:authority` instead).
+pub fn request_host<'a>(headers: &'a HeaderMap, uri: &'a axum::http::Uri) -> Option<&'a str> {
+    let host = headers.get(axum::http::header::HOST).and_then(|h| h.to_str().ok());
+    host.or_else(|| uri.authority().map(|a| a.as_str()))
+}
+
+/// DNS-rebinding guard. Any website can point its own DNS name at this server
+/// and call the API as a same-origin page. Such a page can only reach us under
+/// a DNS name it controls, so only loopback names, IP literals, the bind host,
+/// and `allowed_hosts` pass. Basic auth lifts the guard (the rebound page has no
+/// credentials for its name); proxy auth does not, because a same-origin page
+/// can set the auth header itself.
 /// Requests without a Host (HTTP/1.0 clients, never browsers) pass too.
 pub fn host_allowed(cfg: &AppConfig, host: Option<&str>) -> bool {
     let Some(host) = host else { return true };
-    if !cfg.auth_header.is_empty() || !cfg.credential.is_empty() || host.starts_with('[') {
+    if (cfg.auth_header.is_empty() && !cfg.credential.is_empty()) || host.starts_with('[') {
         return true;
     }
     let name = host.rsplit_once(':').map_or(host, |(name, _)| name).to_ascii_lowercase();
@@ -994,6 +1010,23 @@ mod archive_tests {
         }
         cfg.credential = "u:p".into();
         assert!(host_allowed(&cfg, Some("attacker.com")));
+        // Proxy auth wins over the credential and keeps the guard on.
+        cfg.auth_header = "X-Remote-User".into();
+        assert!(!host_allowed(&cfg, Some("attacker.com")));
+        assert!(host_allowed(&cfg, Some("box.lan")));
+    }
+
+    #[test]
+    fn proxy_user_must_be_non_blank() {
+        let cfg = AppConfig { auth_header: "X-Remote-User".into(), ..Default::default() };
+        let mut headers = HeaderMap::new();
+        assert!(!proxy_user_present(&cfg, &headers));
+        for blank in ["", "  "] {
+            headers.insert("x-remote-user", blank.parse().unwrap());
+            assert!(!proxy_user_present(&cfg, &headers), "{blank:?}");
+        }
+        headers.insert("x-remote-user", "alice".parse().unwrap());
+        assert!(proxy_user_present(&cfg, &headers));
     }
 
     #[tokio::test]

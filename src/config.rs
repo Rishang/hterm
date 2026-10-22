@@ -66,7 +66,9 @@ pub struct AppConfig {
     #[serde(default)]
     pub exit_no_conn: bool,
 
-    /// Reject WebSocket upgrades whose `Origin` header doesn't match `Host`.
+    /// Also reject WebSocket upgrades that carry no `Origin` header (non-browser
+    /// clients). Upgrades whose `Origin` doesn't match `Host` or an
+    /// `allowed_hosts` name are always rejected (see `ws::origin_allowed`).
     #[serde(default)]
     pub check_origin: bool,
 
@@ -80,13 +82,15 @@ pub struct AppConfig {
     /// When non-empty, the server trusts this header (set by the upstream proxy)
     /// to mean the request is authenticated, and skips Basic Auth entirely.
     /// The header *value* is treated as the username and logged, but not
-    /// validated — only use this behind a trusted proxy.
+    /// validated; a blank value is refused. Any client that reaches the port can
+    /// send the header, so only use this behind a trusted proxy that strips
+    /// client copies of it. The Host guard stays on in this mode.
     #[serde(default)]
     pub auth_header: String,
 
-    /// Extra `Host` names accepted when no auth is configured. Loopback names
-    /// and IP literals are always accepted; any other name is refused to block
-    /// DNS rebinding (see `tools::host_allowed`).
+    /// Extra `Host` names accepted without Basic auth (and WebSocket `Origin`
+    /// names). Loopback names and IP literals are always accepted; any other
+    /// name is refused to block DNS rebinding (see `tools::host_allowed`).
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
 
@@ -105,7 +109,7 @@ pub struct AppConfig {
     ///
     /// When enabled, repeated `arg=<value>` pairs are decoded and appended to
     /// the shell's argv before `execve`.  Disabled by default because it lets
-    /// any connected client run arbitrary commands.
+    /// any connected client run arbitrary commands; ignored without `writable`.
     #[serde(default)]
     pub url_arg: bool,
 

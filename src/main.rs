@@ -89,7 +89,8 @@ struct Cli {
     #[arg(short = 'q', long = "exit-no-conn")]
     exit_no_conn: bool,
 
-    /// Reject WebSocket upgrades from a different origin
+    /// Also reject WebSocket upgrades without an Origin header (cross-origin
+    /// upgrades are always rejected)
     #[arg(short = 'O', long = "check-origin")]
     check_origin: bool,
 
@@ -98,17 +99,19 @@ struct Cli {
     credential: Option<String>,
 
     /// HTTP header name for reverse-proxy auth (e.g. X-Remote-User).
-    /// When set, the presence of this header (injected by an upstream proxy)
-    /// authenticates the request; Basic Auth is skipped entirely.
+    /// When set, a non-blank value in this header (injected by an upstream
+    /// proxy) authenticates the request; Basic Auth is skipped entirely. The
+    /// Host guard stays on, so pass the proxy's public name with --allowed-host
     #[arg(short = 'A', long = "auth-header")]
     auth_header: Option<String>,
 
-    /// Accept this Host name without auth (repeatable); loopback names and IPs
-    /// are always accepted
+    /// Accept this Host name without Basic auth, and WebSocket upgrades from
+    /// pages on it (repeatable); loopback names and IPs are always accepted as Host
     #[arg(long = "allowed-host")]
     allowed_hosts: Vec<String>,
 
     /// Allow clients to pass extra shell arguments via ?arg=value in the URL
+    /// (ignored without --writable)
     #[arg(short = 'a', long = "url-arg")]
     url_arg: bool,
 
@@ -211,6 +214,18 @@ async fn main() {
     }
     if !cfg.auth_header.is_empty() && !cfg.credential.is_empty() {
         tracing::warn!("Both auth_header and credential are set; auth_header takes precedence");
+    }
+    if !cfg.auth_header.is_empty() && cfg.unix_socket.is_empty() && !is_loopback_host(&cfg.host) {
+        tracing::warn!(
+            host = %cfg.host,
+            "auth_header trusts any client that sets the header: bind to loopback or a Unix socket \
+             only the proxy can reach, and make the proxy strip client copies of the header"
+        );
+    }
+    if cfg.url_arg && !cfg.writable {
+        // URL arguments are command execution, which read-only mode forbids.
+        tracing::warn!("--url-arg is ignored without --writable");
+        cfg.url_arg = false;
     }
 
     // ── Pre-compute Basic Auth expected header value ──────────────────────────
@@ -484,14 +499,26 @@ async fn serve_index(
         return tools::unauthorized(&state.config);
     }
     if let Some(content) = state.custom_index {
-        axum::response::Html(content).into_response()
+        // A user-supplied index may rely on inline scripts, so it only gets the
+        // anti-framing directive.
+        ([(axum::http::header::CONTENT_SECURITY_POLICY, "frame-ancestors 'self'")], axum::response::Html(content))
+            .into_response()
     } else {
         if let Some(content) = Assets::get("index.html") {
-            return axum::response::Html(content.data).into_response();
+            return ([(axum::http::header::CONTENT_SECURITY_POLICY, INDEX_CSP)], axum::response::Html(content.data))
+                .into_response();
         }
         StatusCode::NOT_FOUND.into_response()
     }
 }
+
+/// Defense in depth behind the markdown sanitizer: previewed files are
+/// untrusted and render same-origin, so only bundled scripts may run.
+/// `wasm-unsafe-eval` is required by ghostty-web's WebAssembly core; styles stay
+/// unrestricted because CodeMirror and mermaid inject them at runtime.
+/// `frame-ancestors` stops other sites framing the terminal (clickjacking).
+const INDEX_CSP: &str =
+    "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'";
 
 async fn serve_asset(axum::extract::Path(path): axum::extract::Path<String>) -> impl IntoResponse {
     match Assets::get(&path) {
@@ -619,15 +646,23 @@ async fn host_guard(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let host = req.headers().get(axum::http::header::HOST).and_then(|h| h.to_str().ok());
-    let host = host.or_else(|| req.uri().authority().map(|a| a.as_str()));
+    let host = tools::request_host(req.headers(), req.uri());
     if tools::host_allowed(&state.config, host) {
         return next.run(req).await;
     }
     let host = host.unwrap_or_default();
-    tracing::warn!(host, "request refused: unknown Host without auth (possible DNS rebinding)");
-    let msg = format!("Host '{host}' is not allowed without auth. Add its name with --allowed-host, or enable auth.");
+    tracing::warn!(host, "request refused: unknown Host (possible DNS rebinding)");
+    let msg = if state.config.auth_header.is_empty() {
+        format!("Host '{host}' is not allowed without auth. Add its name with --allowed-host, or enable auth.")
+    } else {
+        format!("Host '{host}' is not allowed. Add the name the proxy forwards with --allowed-host.")
+    };
     (StatusCode::FORBIDDEN, msg).into_response()
+}
+
+/// Whether a bind address only accepts connections from this machine.
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
