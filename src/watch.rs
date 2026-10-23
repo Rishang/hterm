@@ -105,12 +105,10 @@ impl Watches {
     fn new() -> Result<Self, Errno> {
         // IN_NONBLOCK is required: AsyncFd must never block the runtime thread.
         let inotify = Inotify::init(InitFlags::IN_NONBLOCK | InitFlags::IN_CLOEXEC)?;
-        let fd = AsyncFd::new(WatchFd(inotify)).map_err(|_| Errno::EINVAL)?;
-        Ok(Self {
-            fd,
-            by_path: HashMap::new(),
-            by_wd: HashMap::new(),
-        })
+        // SAFETY: WatchFd owns the inotify fd, which stays open until the AsyncFd drops it.
+        let fd = unsafe { AsyncFd::register(WatchFd(inotify)) }
+            .map_err(|e| Errno::from_raw(std::io::Error::from(e).raw_os_error().unwrap_or(Errno::EINVAL as i32)))?;
+        Ok(Self { fd, by_path: HashMap::new(), by_wd: HashMap::new() })
     }
 
     /// Make the watch set exactly `desired`, adding and removing the difference.
@@ -120,12 +118,7 @@ impl Watches {
     fn sync(&mut self, desired: &[String]) {
         let wanted: HashSet<&str> = desired.iter().map(String::as_str).collect();
 
-        let stale: Vec<String> = self
-            .by_path
-            .keys()
-            .filter(|path| !wanted.contains(path.as_str()))
-            .cloned()
-            .collect();
+        let stale: Vec<String> = self.by_path.keys().filter(|path| !wanted.contains(path.as_str())).cloned().collect();
         for path in stale {
             self.remove(&path);
         }
@@ -204,11 +197,7 @@ fn drain_events(
                         }
                         continue;
                     }
-                    let name_is_noise = ev
-                        .name
-                        .as_ref()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(is_noise);
+                    let name_is_noise = ev.name.as_ref().and_then(|n| n.to_str()).is_some_and(is_noise);
                     if name_is_noise {
                         continue;
                     }
@@ -353,21 +342,14 @@ async fn watch_sse_handler(
     sessions.insert(session_id.clone(), dirs_tx);
     drop(sessions);
 
-    let endpoint = format!(
-        "{}/api/files/watch?sessionId={}",
-        state.config.base_path, session_id
-    );
+    let endpoint = format!("{}/api/files/watch?sessionId={}", state.config.base_path, session_id);
     let _ = events_tx.try_send(Event::default().event("endpoint").data(&endpoint));
 
     tokio::spawn(run_session(watches, dirs_rx, events_tx));
     tracing::debug!(session_id = %session_id, "file watch session opened");
 
-    Ok(Sse::new(WatchStream {
-        inner: ReceiverStream::new(events_rx),
-        session_id,
-        state: Arc::clone(&state),
-    })
-    .keep_alive(axum::response::sse::KeepAlive::new().text("ping")))
+    Ok(Sse::new(WatchStream { inner: ReceiverStream::new(events_rx), session_id, state: Arc::clone(&state) })
+        .keep_alive(axum::response::sse::KeepAlive::new().text("ping")))
 }
 
 /// `POST /api/files/watch?sessionId=…` — declare the directories to watch.
@@ -381,22 +363,13 @@ async fn watch_dirs_handler(
         return axum::http::StatusCode::UNAUTHORIZED;
     }
 
-    let sender = state
-        .watch_sessions
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&query.session_id)
-        .cloned();
+    let sender = state.watch_sessions.read().unwrap_or_else(|e| e.into_inner()).get(&query.session_id).cloned();
 
     let Some(sender) = sender else {
         return axum::http::StatusCode::NOT_FOUND;
     };
     // Only absolute paths are watchable, matching the rest of the files API.
-    let paths: Vec<String> = req
-        .paths
-        .into_iter()
-        .filter(|p| p.starts_with('/'))
-        .collect();
+    let paths: Vec<String> = req.paths.into_iter().filter(|p| p.starts_with('/')).collect();
 
     match sender.send(paths).await {
         Ok(_) => axum::http::StatusCode::NO_CONTENT,

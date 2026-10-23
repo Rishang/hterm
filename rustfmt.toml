@@ -1,0 +1,5 @@
+# Stable options only, so `cargo fmt` works on any toolchain.
+edition = "2021"
+max_width = 120
+# Keep short struct literals, chains, and let-else on one line, matching existing code.
+use_small_heuristics = "Max"

@@ -15,16 +15,25 @@ info:
        - Header: `Authorization: Basic <base64(username:password)>`
 
     2. **Reverse Proxy Auth**: Set via `--auth-header X-Remote-User` flag
-       - Header: `X-Remote-User: <username>` (or custom header name)
+       - Header: `X-Remote-User: <username>` (or custom header name); a blank value is refused
+       - Any client that reaches the port can send this header. Bind hterm where only the proxy
+         can reach it (loopback or `--interface`), and have the proxy strip client copies.
 
-    If neither is configured, authentication is disabled.
+    Without Basic Auth, every route (including static assets) answers 403 unless the `Host`
+    header is a loopback name (`localhost`, `*.localhost`), an IP address, the bind host, or a
+    name passed with `--allowed-host`. This blocks DNS rebinding, where a website points its own
+    name at this server to call the API. Proxy auth keeps this guard on, so pass the public name
+    the proxy forwards with `--allowed-host`.
+
+    Without `--writable`, `/api/exec`, the `bash` tool and `--url-arg` are refused along with
+    file writes.
 
     ## Base Path
 
     All routes can be prefixed with a custom base path using the `--base-path` flag.
     Example: `--base-path /terminal` results in routes like `/terminal/api/config`
 
-  version: 0.1.0
+  version: 0.4.0
   contact:
     name: GitHub Repository
     url: https://github.com/Rishang/hterm
@@ -58,9 +67,15 @@ paths:
         When `--credential` is set, an unauthenticated request gets a `401`
         with a `WWW-Authenticate` header, which triggers the browser's
         native Basic Auth login prompt. When `--auth-header` is set instead,
-        a missing header also yields `401`, but without that challenge
+        a missing or blank header also yields `401`, but without that challenge
         header, since that credential is expected to be injected by an
         upstream proxy rather than typed by a user.
+
+        The embedded page is sent with `Content-Security-Policy: script-src 'self'
+        'wasm-unsafe-eval'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'`,
+        so previewed files cannot run scripts and other sites cannot frame the
+        terminal. A custom `--index` page may need inline scripts, so it only gets
+        `frame-ancestors 'self'`.
       tags:
         - assets
       security:
@@ -69,6 +84,11 @@ paths:
       responses:
         '200':
           description: HTML page
+          headers:
+            Content-Security-Policy:
+              description: Script and framing restrictions (see above)
+              schema:
+                type: string
           content:
             text/html:
               schema:
@@ -106,7 +126,8 @@ paths:
         The command runs under the configured shell (`sh -c`) with any
         configured uid/gid privilege drop and working directory applied.
         Combined stdout+stderr output is capped and the command is killed
-        after a 300s timeout.
+        after a 300s timeout. Requires `--writable`; returns 403 in read-only
+        mode, and the `bash` tool is disabled likewise.
       tags:
         - terminal
       security:
@@ -133,6 +154,8 @@ paths:
                 status: 0
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           description: Failed to spawn command
           content:
@@ -193,7 +216,19 @@ paths:
       description: |
         Call a tool by name with arguments. Returns tool output in MCP format.
 
-        **Available tools**: bash, read_file, write_file
+        **Available tools**: bash, read_file, write_file, download_file, upload_file
+
+        `download_file` returns the bytes as an MCP embedded resource
+        (`{ type: "resource", resource: { uri, mimeType, blob } }`, `blob` base64)
+        after a text summary; directories arrive as a zip archive. Payloads are
+        capped at 8 MiB — use `GET /api/files/download` for larger transfers.
+
+        `upload_file` takes base64 `content` (max 8 MiB decoded), creates missing
+        parent directories, and refuses to replace an existing file unless
+        `overwrite: true`. Use `PUT /api/files/upload` for larger files.
+
+        `write_file`, `download_file` and `upload_file` require an absolute
+        `path`; `.` and `..` segments are resolved before use.
       tags:
         - tools
       security:
@@ -226,6 +261,20 @@ paths:
                   arguments:
                     path: "/tmp/test.txt"
                     content: "Hello, World!"
+              download_file:
+                summary: Download a file or directory (zip) as base64
+                value:
+                  name: download_file
+                  arguments:
+                    path: "/home/user/projects/docs"
+              upload_file:
+                summary: Upload base64 content to a file
+                value:
+                  name: upload_file
+                  arguments:
+                    path: "/tmp/upload/hello.bin"
+                    content: "aGVsbG8="
+                    overwrite: false
       responses:
         '200':
           description: Tool executed successfully
@@ -271,7 +320,7 @@ paths:
           Sent when available after the session starts and after output flushes only
           when the shell directory changes; clients must treat it as a control frame.
 
-        **Query Parameters** (if `url_arg` enabled):
+        **Query Parameters** (if `url_arg` and `writable` are enabled):
         - `arg`: Repeated parameter for shell arguments (e.g., `?arg=-c&arg=ls`)
       tags:
         - terminal
@@ -281,7 +330,7 @@ paths:
       parameters:
         - name: arg
           in: query
-          description: Shell argument (requires --url-arg flag)
+          description: Shell argument (requires --url-arg and --writable)
           schema:
             type: string
           style: form
@@ -291,6 +340,10 @@ paths:
           description: WebSocket upgrade successful
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            Cross-origin upgrade. A present `Origin` must match `Host` or name an
+            `--allowed-host`; with `--check-origin`, a missing `Origin` is refused too.
         '503':
           description: Max clients reached or --once mode active
 
@@ -525,7 +578,10 @@ paths:
         Copy a file or directory recursively.
 
         Directory copies where the destination is the source itself or one of its
-        descendants are rejected to avoid recursive self-copying.
+        descendants are rejected to avoid recursive self-copying, and so is a file
+        copied onto itself (or a hard link or symlink to it), which would empty it.
+        An existing destination is a 409 unless `overwrite` is true; with it, a file
+        is replaced and a directory is merged into.
       tags:
         - terminal
       security:
@@ -544,7 +600,228 @@ paths:
         '201':
           description: File or directory copied
         '400':
-          description: Invalid path, recursive copy, or filesystem error
+          description: Invalid path, recursive or same-file copy, or filesystem error
+          content:
+            text/plain:
+              schema:
+                type: string
+        '409':
+          $ref: '#/components/responses/DestinationExists'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/files/download:
+    get:
+      summary: Download a file or directory
+      description: |
+        Stream a regular file as an attachment, or a directory as `<name>.zip`.
+        Pass `paths` instead of `path` to download several files and directories
+        together as `selection.zip`.
+
+        Zip entries sit under a top-level folder named after the directory; in a
+        selection each item is a top-level entry, and repeated names are
+        numbered (`notes (2).txt`).
+        Symlinked directories, special files, and unreadable entries are skipped.
+        The body is streamed; if an I/O error occurs mid-transfer the connection
+        is aborted rather than delivering a truncated file.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: false
+          description: Absolute path of the file or directory (exactly one of `path` or `paths`)
+          schema:
+            type: string
+          example: "/home/user/projects/docs"
+        - name: paths
+          in: query
+          required: false
+          description: JSON array of absolute paths, zipped together as `selection.zip`
+          schema:
+            type: string
+          example: '["/home/user/projects/docs","/home/user/projects/README.md"]'
+      responses:
+        '200':
+          description: File contents, or a zip archive for directories and selections
+          headers:
+            Content-Disposition:
+              description: "`attachment` with ASCII and RFC 5987 UTF-8 filenames"
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid path, missing file, or not a regular file/directory
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/files/find:
+    get:
+      summary: List every project file
+      description: |
+        Absolute paths of every file under the server's working directory, one
+        per line, for the command palette. Uses `rg --files` (honours
+        .gitignore), then `fd`, then `find` without `.git`, `node_modules`,
+        `dist`, and `target`. Capped at 200,000 paths. Runs without a shell, so
+        it works in read-only mode.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      responses:
+        '200':
+          description: Newline-separated absolute file paths
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: "/home/user/project/README.md\n/home/user/project/src/main.rs\n"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: No file-listing program could run
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/files/search:
+    get:
+      summary: Search file contents
+      description: |
+        Search under `root` with `rg`, or `grep -r` when ripgrep is missing.
+        Common build and dependency directories are skipped. The body starts
+        with a `__RG__` line (`path:line:column:text` lines follow) or a
+        `__GREP__` line (`path:line:text`). At most 2,001 result lines are
+        returned; the browser shows 2,000 and treats the extra one as
+        "truncated". Runs without a shell, so it works in read-only mode.
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Text to search for (a regular expression when `regexp` is true)
+          schema:
+            type: string
+        - name: root
+          in: query
+          required: true
+          description: Absolute path of the directory to search
+          schema:
+            type: string
+        - name: case_sensitive
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: whole_word
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: regexp
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: include
+          in: query
+          description: Comma or space separated globs to search only
+          schema:
+            type: string
+        - name: exclude
+          in: query
+          description: Comma or space separated globs to skip
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Mode marker line followed by matching lines
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: "__RG__\n/home/user/project/src/main.rs:12:5:fn main() {\n"
+        '400':
+          description: Empty query, invalid root, or a pattern the search tool rejected
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Neither rg nor grep could run, or the search timed out
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/files/upload:
+    put:
+      summary: Upload a file
+      description: |
+        Stream the raw request body to `path`. Missing parent directories are
+        created, so a folder upload sends one request per file using its
+        relative path. An existing file is left untouched (409) unless
+        `overwrite=true`. The body is written to a temporary file that replaces
+        `path` only once the transfer completes, so a failed upload leaves no
+        partial file and never damages the file it was replacing. Bodies over
+        4 GiB are rejected (413).
+      tags:
+        - terminal
+      security:
+        - BasicAuth: []
+        - ProxyAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Absolute destination path of the file
+          schema:
+            type: string
+          example: "/home/user/projects/docs/photo.png"
+        - name: overwrite
+          in: query
+          required: false
+          description: Replace the file if it already exists
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: File written
+        '400':
+          description: Invalid path, path collides with a directory, or filesystem/transfer error
           content:
             text/plain:
               schema:
@@ -553,6 +830,18 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          description: File already exists and `overwrite` was not set
+          content:
+            text/plain:
+              schema:
+                type: string
+        '413':
+          description: Body exceeds the 4 GiB upload limit
+          content:
+            text/plain:
+              schema:
+                type: string
 
   /api/files/watch:
     get:
@@ -736,7 +1025,10 @@ paths:
   /api/files/{path}:
     patch:
       summary: Rename or move a file or directory
-      description: Rename or move the file or directory identified by the URL-encoded path.
+      description: |
+        Rename or move the file or directory identified by the URL-encoded path.
+        An existing destination is a 409 unless `overwrite` is true. Renaming
+        onto the same path succeeds without changes.
       tags:
         - terminal
       security:
@@ -767,6 +1059,8 @@ paths:
             text/plain:
               schema:
                 type: string
+        '409':
+          $ref: '#/components/responses/DestinationExists'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -864,7 +1158,7 @@ components:
           description: Whether terminal is writable
         url_arg:
           type: boolean
-          description: Allow URL query arguments
+          description: Allow URL query arguments (always false without `writable`)
         cwd:
           type: string
           description: Working directory (file manager root)
@@ -945,6 +1239,10 @@ components:
           type: string
           description: Absolute destination path
           example: "/home/user/projects/new-name.txt"
+        overwrite:
+          type: boolean
+          default: false
+          description: Replace an existing destination instead of answering 409
 
     CopyFileRequest:
       type: object
@@ -960,6 +1258,10 @@ components:
           type: string
           description: Absolute destination path
           example: "/home/user/projects/source-copy"
+        overwrite:
+          type: boolean
+          default: false
+          description: Replace an existing file or merge into an existing directory instead of answering 409
 
     WatchDirsRequest:
       type: object
@@ -1159,8 +1461,15 @@ components:
           schema:
             type: string
             example: "Unauthorized"
+    DestinationExists:
+      description: The destination already exists and `overwrite` was not set
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "destination already exists"
     Forbidden:
-      description: File write operations are disabled in read-only mode
+      description: File writes or command execution are disabled in read-only mode
       content:
         text/plain:
           schema:
@@ -1179,4 +1488,4 @@ components:
       name: X-Remote-User
       description: |
         Reverse proxy authentication header (configured with --auth-header).
-        Header name is customizable via CLI flag.
+        Header name is customizable via CLI flag. A blank value is refused.

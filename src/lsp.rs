@@ -41,14 +41,12 @@ const MAX_SESSIONS: usize = 16;
 const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const UNAVAILABLE_RETRY: Duration = Duration::from_secs(15);
 const MAX_JEDI_PROCESSES: usize = 4;
-static JEDI_PROCESSES: tokio::sync::Semaphore =
-    tokio::sync::Semaphore::const_new(MAX_JEDI_PROCESSES);
+static JEDI_PROCESSES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(MAX_JEDI_PROCESSES);
 // Each in-flight request pins a copy of the document plus the server's reply, so
 // the ceiling on concurrency is also the ceiling on transient memory. Past it,
 // requests fall back to local completion rather than queueing behind a keystroke.
 const MAX_INFLIGHT_REQUESTS: usize = 8;
-static INFLIGHT_REQUESTS: tokio::sync::Semaphore =
-    tokio::sync::Semaphore::const_new(MAX_INFLIGHT_REQUESTS);
+static INFLIGHT_REQUESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(MAX_INFLIGHT_REQUESTS);
 
 // Ty currently returns `null` for some third-party `from module import Name`
 // completions. Jedi supplies those import symbols without replacing Ty's LSP.
@@ -369,9 +367,7 @@ async fn hover_handler(
     }
 
     match dispatch(&state, &request, Operation::Hover).await {
-        Some((result, environment)) => {
-            Json(json!({ "result": result, "environment": environment })).into_response()
-        }
+        Some((result, environment)) => Json(json!({ "result": result, "environment": environment })).into_response(),
         None => Json(Value::Null).into_response(),
     }
 }
@@ -432,11 +428,14 @@ async fn session_for(
 ) -> Result<(Arc<AsyncMutex<LspSession>>, RequestContext), String> {
     let context = request_context(request)?;
     let slot = manager(state).checkout(&context.key)?;
-    let session = slot.get_or_try_init(|| async {
-        LspSession::start(context.server, context.workspace(), &context.environment, &state.config)
-            .await
-            .map(|session| Arc::new(AsyncMutex::new(session)))
-    }).await.map_err(|error| error.to_string());
+    let session = slot
+        .get_or_try_init(|| async {
+            LspSession::start(context.server, context.workspace(), &context.environment, &state.config)
+                .await
+                .map(|session| Arc::new(AsyncMutex::new(session)))
+        })
+        .await
+        .map_err(|error| error.to_string());
     match session {
         Ok(session) => Ok((session.clone(), context)),
         Err(error) => {
@@ -466,7 +465,9 @@ impl LspManager {
             return Ok(entry.slot.clone());
         }
         if self.sessions.len() >= MAX_SESSIONS {
-            if let Some(oldest) = self.sessions.iter().min_by_key(|(_, entry)| entry.last_used).map(|(key, _)| key.clone()) {
+            if let Some(oldest) =
+                self.sessions.iter().min_by_key(|(_, entry)| entry.last_used).map(|(key, _)| key.clone())
+            {
                 if let Some(entry) = self.sessions.remove(&oldest) {
                     retire_slot(&entry.slot);
                 }
@@ -488,7 +489,12 @@ impl LspManager {
     }
 
     fn discard(&mut self, key: &SessionKey, session: &Arc<AsyncMutex<LspSession>>) {
-        if self.sessions.get(key).and_then(|entry| entry.slot.get()).is_some_and(|current| Arc::ptr_eq(current, session)) {
+        if self
+            .sessions
+            .get(key)
+            .and_then(|entry| entry.slot.get())
+            .is_some_and(|current| Arc::ptr_eq(current, session))
+        {
             if let Some(entry) = self.sessions.remove(key) {
                 retire_slot(&entry.slot);
             }
@@ -530,17 +536,16 @@ fn completion_items(result: Value) -> (Value, bool) {
 }
 
 fn is_python_import_completion(request: &CompletionRequest) -> bool {
-    request
-        .content
-        .lines()
-        .nth(request.position.line as usize)
-        .is_some_and(|line| {
-            let line = line.trim_start();
-            line.starts_with("from ") && line.contains(" import ")
-        })
+    request.content.lines().nth(request.position.line as usize).is_some_and(|line| {
+        let line = line.trim_start();
+        line.starts_with("from ") && line.contains(" import ")
+    })
 }
 
-async fn python_import_completions(request: &CompletionRequest, environment: &LspEnvironment) -> Result<(Value, bool), String> {
+async fn python_import_completions(
+    request: &CompletionRequest,
+    environment: &LspEnvironment,
+) -> Result<(Value, bool), String> {
     // Every fallback is a fresh interpreter; cap how many exist at once.
     let _permit = tokio::time::timeout(PYTHON_FALLBACK_TIMEOUT, JEDI_PROCESSES.acquire())
         .await
@@ -566,7 +571,8 @@ async fn python_import_completions(request: &CompletionRequest, environment: &Ls
     let mut stdout = child.stdout.take().ok_or("Python fallback stdout unavailable")?;
     let mut output = Vec::new();
     let operation = async {
-        stdin.write_all(&serde_json::to_vec(&input).map_err(|error| error.to_string())?)
+        stdin
+            .write_all(&serde_json::to_vec(&input).map_err(|error| error.to_string())?)
             .await
             .map_err(|error| error.to_string())?;
         drop(stdin);
@@ -589,9 +595,7 @@ async fn python_import_completions(request: &CompletionRequest, environment: &Ls
     if !status.success() {
         return Err("Python completion failed".to_string());
     }
-    serde_json::from_slice(&output)
-        .map(completion_items)
-        .map_err(|error| error.to_string())
+    serde_json::from_slice(&output).map(completion_items).map_err(|error| error.to_string())
 }
 
 impl LspSession {
@@ -641,13 +645,7 @@ impl LspSession {
         let (sender, messages) = mpsc::channel(2);
         tokio::spawn(read_messages(stdout, sender));
 
-        let mut session = Self {
-            child,
-            stdin,
-            messages,
-            next_id: 1,
-            documents: HashMap::new(),
-        };
+        let mut session = Self { child, stdin, messages, next_id: 1, documents: HashMap::new() };
         if let Err(error) = session.initialize(workspace).await {
             let _ = session.child.kill().await;
             return Err(error);
@@ -701,7 +699,8 @@ impl LspSession {
                         text_document: TextDocument { uri: &uri, language_id: None, version, text: None },
                         content_changes: Some([TextChange { text: content }]),
                     },
-                ).await
+                )
+                .await
             }
             None => {
                 self.close_oldest_document().await?;
@@ -709,10 +708,16 @@ impl LspSession {
                 self.notify(
                     "textDocument/didOpen",
                     DocumentSync {
-                        text_document: TextDocument { uri: &uri, language_id: Some(language), version: 1, text: Some(content) },
+                        text_document: TextDocument {
+                            uri: &uri,
+                            language_id: Some(language),
+                            version: 1,
+                            text: Some(content),
+                        },
                         content_changes: None,
                     },
-                ).await
+                )
+                .await
             }
         }
     }
@@ -722,11 +727,8 @@ impl LspSession {
         if self.documents.len() < MAX_OPEN_DOCUMENTS {
             return Ok(());
         }
-        let Some(oldest) = self
-            .documents
-            .iter()
-            .min_by_key(|(_, document)| document.last_used)
-            .map(|(path, _)| path.clone())
+        let Some(oldest) =
+            self.documents.iter().min_by_key(|(_, document)| document.last_used).map(|(path, _)| path.clone())
         else {
             return Ok(());
         };
@@ -761,10 +763,7 @@ impl LspSession {
                 if let (Some(server_id), Some(method)) = (message.get("id"), server_method) {
                     let reply = match method {
                         "workspace/configuration" => {
-                            let count = message
-                                .pointer("/params/items")
-                                .and_then(Value::as_array)
-                                .map_or(0, Vec::len);
+                            let count = message.pointer("/params/items").and_then(Value::as_array).map_or(0, Vec::len);
                             json!({ "jsonrpc": "2.0", "id": server_id, "result": vec![Value::Null; count] })
                         }
                         "client/registerCapability" | "client/unregisterCapability" => {
@@ -782,7 +781,9 @@ impl LspSession {
                     self.send(reply).await?;
                 }
             }
-        }).await {
+        })
+        .await
+        {
             Ok(response) => response?,
             // A slow server is still a usable server; restarting it here would
             // stall exactly when it is busiest, such as during initial indexing.
@@ -807,7 +808,10 @@ impl LspSession {
             self.stdin.write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes()).await?;
             self.stdin.write_all(&body).await?;
             self.stdin.flush().await
-        }).await.map_err(|_| "language server write timed out".to_string())?.map_err(|error| error.to_string())?;
+        })
+        .await
+        .map_err(|_| "language server write timed out".to_string())?
+        .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -841,13 +845,9 @@ async fn read_message(reader: &mut BufReader<ChildStdout>) -> Result<Value, Stri
     let mut header_bytes = 0;
     loop {
         let mut line = String::new();
-        let remaining = MAX_LSP_HEADER_SIZE.checked_sub(header_bytes)
-            .ok_or("language server message header is too large")?;
-        let bytes = (&mut *reader)
-            .take(remaining as u64)
-            .read_line(&mut line)
-            .await
-            .map_err(|e| e.to_string())?;
+        let remaining =
+            MAX_LSP_HEADER_SIZE.checked_sub(header_bytes).ok_or("language server message header is too large")?;
+        let bytes = (&mut *reader).take(remaining as u64).read_line(&mut line).await.map_err(|e| e.to_string())?;
         if bytes == 0 {
             return Err("language server closed stdout".to_string());
         }
@@ -878,7 +878,8 @@ fn language_id(language: &str, path: &Path) -> Option<&'static str> {
         path.extension().and_then(|extension| extension.to_str()).unwrap_or("")
     } else {
         language
-    }.to_ascii_lowercase();
+    }
+    .to_ascii_lowercase();
 
     match value.as_str() {
         "rs" | "rust" => Some("rust"),
@@ -939,30 +940,46 @@ fn python_venv(path: &Path) -> Option<PathBuf> {
 
 fn environment_bin(root: &Path) -> PathBuf {
     #[cfg(windows)]
-    { root.join("Scripts") }
+    {
+        root.join("Scripts")
+    }
     #[cfg(not(windows))]
-    { root.join("bin") }
+    {
+        root.join("bin")
+    }
 }
 
 fn python_command_path(root: &Path) -> PathBuf {
     #[cfg(windows)]
-    { environment_bin(root).join("python.exe") }
+    {
+        environment_bin(root).join("python.exe")
+    }
     #[cfg(not(windows))]
-    { environment_bin(root).join("python") }
+    {
+        environment_bin(root).join("python")
+    }
 }
 
 fn python_command(environment: &LspEnvironment) -> PathBuf {
-    environment.root().map(python_command_path).filter(|path| path.is_file())
+    environment
+        .root()
+        .map(python_command_path)
+        .filter(|path| path.is_file())
         .unwrap_or_else(|| PathBuf::from("python3"))
 }
 
 fn environment_program(program: &str, environment: &LspEnvironment) -> PathBuf {
-    environment.root().map(|root| environment_bin(root).join(program)).filter(|path| path.is_file())
+    environment
+        .root()
+        .map(|root| environment_bin(root).join(program))
+        .filter(|path| path.is_file())
         .unwrap_or_else(|| PathBuf::from(program))
 }
 
 fn apply_environment(command: &mut Command, environment: &LspEnvironment) -> Result<(), String> {
-    let Some(root) = environment.root() else { return Ok(()); };
+    let Some(root) = environment.root() else {
+        return Ok(());
+    };
     let bin = environment_bin(root);
     let path = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path)))
@@ -973,13 +990,34 @@ fn apply_environment(command: &mut Command, environment: &LspEnvironment) -> Res
 
 fn workspace_root(language: &str, path: &Path) -> PathBuf {
     let markers: &[&str] = match language {
-        "helm" => &["Chart.yaml", "helmfile.yaml", ".git", "Cargo.toml", "go.mod", "package.json", "pyproject.toml", "requirements.txt"],
-        "kubernetes" => &["kustomization.yaml", "Kustomization", ".git", "Cargo.toml", "go.mod", "package.json", "pyproject.toml", "requirements.txt"],
+        "helm" => &[
+            "Chart.yaml",
+            "helmfile.yaml",
+            ".git",
+            "Cargo.toml",
+            "go.mod",
+            "package.json",
+            "pyproject.toml",
+            "requirements.txt",
+        ],
+        "kubernetes" => &[
+            "kustomization.yaml",
+            "Kustomization",
+            ".git",
+            "Cargo.toml",
+            "go.mod",
+            "package.json",
+            "pyproject.toml",
+            "requirements.txt",
+        ],
         _ => &[".git", "Cargo.toml", "go.mod", "package.json", "pyproject.toml", "requirements.txt"],
     };
     let directory = path.parent().unwrap_or(path);
-    directory.ancestors().find(|candidate| markers.iter().any(|marker| candidate.join(marker).exists()))
-        .unwrap_or(directory).to_path_buf()
+    directory
+        .ancestors()
+        .find(|candidate| markers.iter().any(|marker| candidate.join(marker).exists()))
+        .unwrap_or(directory)
+        .to_path_buf()
 }
 
 fn file_uri(path: &Path) -> String {
@@ -1070,7 +1108,10 @@ mod tests {
         let stdin = child.stdin.take().unwrap();
         let mut session = LspSession { child, stdin, messages, next_id: 1, documents: HashMap::new() };
 
-        sender.send(json!({ "jsonrpc": "2.0", "id": 7, "method": "client/registerCapability", "params": {} })).await.unwrap();
+        sender
+            .send(json!({ "jsonrpc": "2.0", "id": 7, "method": "client/registerCapability", "params": {} }))
+            .await
+            .unwrap();
         sender.send(json!({ "jsonrpc": "2.0", "id": 7, "result": { "value": "ours" } })).await.unwrap();
         let response = session.wait_for_response(7, COMPLETION_TIMEOUT).await.unwrap();
         assert_eq!(response, json!({ "value": "ours" }));

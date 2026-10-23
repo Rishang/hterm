@@ -21,6 +21,7 @@ tasks:
     deps: [ui]
     cmds:
       - cp openapi.yaml ui/dist/openapi.yaml
+      - cargo fmt --check
       - '{{default "cargo" .CARGO}} build --release {{.CLI_ARGS}}'
     sources:
       - src/**/*.rs

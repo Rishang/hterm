@@ -34,6 +34,9 @@ export const EXT_ICONS = {
   hcl:   { label: 'HCL', bg: 'var(--file-purple-bg)', color: 'var(--accent-purple)' },
 };
 
+/** Raster images open straight in the image viewer, skipping the size-capped text read. */
+export const isImage = (path) => /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path);
+
 /** @param {string} name @returns {{label:string,bg:string,color:string}|null} */
 export function fileIcon(name) {
   const lower = name.toLowerCase();

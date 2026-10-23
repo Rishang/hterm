@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { fileIcon } from "./fileIcon.js";
+  import { placeContextMenu } from "./contextMenu.js";
 
   /** @type {{ activeTab: string, openFileByPath: Function, visible?: boolean, autoCd?: boolean, terminalCwd?: string, root?: string }} */
   let { activeTab, openFileByPath, visible = true, autoCd = true, terminalCwd = "", root = $bindable("/") } = $props();
@@ -121,6 +122,30 @@
     openFileByPath(node.path);
   }
 
+  // ── Multi-select ──────────────────────────────────────────────────────────
+  // Ctrl/⌘+click toggles rows into a selection that Cut, Copy and Download act
+  // on together; a plain click clears it and opens the row as usual.
+  /** @type {TreeNode[]} */
+  let selection = $state([]);
+
+  /** @param {TreeNode} node */
+  function isSelected(node) { return selection.some(n => n.path === node.path); }
+
+  /** @param {MouseEvent} e @param {TreeNode} node */
+  function onNodeClick(e, node) {
+    if (e.ctrlKey || e.metaKey) {
+      selection = isSelected(node) ? selection.filter(n => n.path !== node.path) : [...selection, node];
+      return;
+    }
+    selection = [];
+    handleClick(node);
+  }
+
+  /** Drops entries already inside another selected folder. @param {TreeNode[]} nodes */
+  function topLevel(nodes) {
+    return nodes.filter(n => !nodes.some(o => o !== n && o.is_dir && isDescendantPath(n.path, o.path)));
+  }
+
   // ── Path editing ──────────────────────────────────────────────────────────
   let editingPath = $state(false);
   let pathInput = $state("");
@@ -176,8 +201,11 @@
   let renaming = $state(null);
   /** @type {TreeNode|null} */
   let deleting = $state(null);
+  /** @type {TreeNode[]|null} */
+  let downloading = $state(null);
   let crudError = $state("");
-  /** @type {{ action: 'cut'|'copy', path: string, name: string }|null} */
+  /** @typedef {{ path: string, name: string, is_dir: boolean }} ClipItem */
+  /** @type {{ action: 'cut'|'copy', items: ClipItem[] }|null} */
   let clipboard = $state(null);
   let initialized = false;
 
@@ -186,6 +214,9 @@
 
   /** @param {HTMLElement} el */
   function focusInput(el) { el.focus(); el.select(); }
+
+  /** Focus a dialog's default button so Enter confirms and Escape reaches the backdrop. @param {HTMLElement} el */
+  function focusButton(el) { el.focus(); }
 
   function fileActionUrl(path) {
     const tail = path.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
@@ -211,8 +242,29 @@
   /** @param {MouseEvent} e @param {TreeNode|null} node */
   function onContextMenu(e, node) {
     e.preventDefault(); e.stopPropagation();
-    ctxMenu = { x: Math.min(e.clientX, window.innerWidth - 210), y: Math.min(e.clientY, window.innerHeight - 240), node };
+    // Right-clicking outside the selection targets just that row, like a file manager.
+    if (node && !isSelected(node)) selection = [];
+    ctxMenu = { x: e.clientX, y: e.clientY, node };
   }
+
+  /** Rows the open menu acts on: the whole selection when it was right-clicked. */
+  let ctxTargets = $derived(
+    !ctxMenu?.node ? [] : selection.length > 1 && isSelected(ctxMenu.node) ? topLevel(selection) : [ctxMenu.node]
+  );
+
+  /** @param {'cut'|'copy'} action */
+  function setClipboard(action) {
+    clipboard = { action, items: ctxTargets.map(n => ({ path: n.path, name: n.name, is_dir: n.is_dir })) };
+    closeCtx();
+  }
+
+  /** @type {HTMLElement|undefined} */
+  let ctxEl = $state();
+  let ctxPos = $state({ x: 0, y: 0 });
+
+  $effect(() => {
+    if (ctxMenu && ctxEl) ctxPos = placeContextMenu(ctxMenu.x, ctxMenu.y, ctxEl);
+  });
 
   async function crudCreate() {
     if (!creating || !creating.name.trim()) { creating = null; return; }
@@ -263,33 +315,150 @@
     } catch(e) { crudError = String(e); deleting = null; }
   }
 
+  // The browser streams the response straight to disk, so large files and
+  // zipped folders are never held in page memory. A HEAD probe first surfaces
+  // server errors here; otherwise the browser would save the error text as the file.
+  // Several items arrive together as one selection.zip.
+  async function downloadNodes() {
+    if (!downloading) return;
+    const nodes = downloading;
+    downloading = null;
+    const [first] = nodes;
+    const query = nodes.length === 1
+      ? `path=${encodeURIComponent(first.path)}`
+      : `paths=${encodeURIComponent(JSON.stringify(nodes.map(n => n.path)))}`;
+    const href = `${basePath}/api/files/download?${query}`;
+    try {
+      const res = await fetch(href, { method: "HEAD" });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    } catch (e) { crudError = `Download failed for ${nodes.length === 1 ? first.name : `${nodes.length} items`}: ${e}`; return; }
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = nodes.length > 1 ? "selection.zip" : first.is_dir ? `${first.name}.zip` : first.name;
+    link.click();
+  }
+
   async function crudPaste(targetNode) {
     if (!clipboard) return;
-    const destDir = targetNode?.is_dir ? targetNode.path : (targetNode ? parentPath(targetNode.path) : root);
-    const destPath = joinPath(destDir, clipboard.name);
-    const sourceDir = parentPath(clipboard.path);
-    const wasCut = clipboard.action === 'cut';
-    try {
-      if (wasCut) {
-        const res = await fetch(fileActionUrl(clipboard.path), {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ newPath: destPath }),
-        });
-        if (!res.ok) throw new Error(await res.text());
-        clipboard = null;
-      } else {
-        // copy via dedicated endpoint
-        const res = await fetch(`${basePath}/api/files/copy`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ src: clipboard.path, dst: destPath }),
-        });
-        if (!res.ok) throw new Error(await res.text());
-      }
-      await refreshDirs(wasCut ? [sourceDir, destDir] : [destDir], true);
-    } catch(e) { crudError = String(e); }
     closeCtx();
+    const { action, items } = clipboard;
+    if (action === 'cut') clipboard = null;
+    selection = [];
+    await transferItems(items, action === 'cut', dropDirFor(targetNode), false);
+  }
+
+  /** `notes.txt` → `notes (copy).txt`, then `notes (copy 2).txt`, …
+   * @param {{ name: string, is_dir: boolean }} item @param {number} n */
+  function copyName(item, n) {
+    const dot = item.is_dir ? -1 : item.name.lastIndexOf('.');
+    const [stem, ext] = dot > 0 ? [item.name.slice(0, dot), item.name.slice(dot)] : [item.name, ""];
+    return `${stem} (copy${n > 1 ? ` ${n}` : ""})${ext}`;
+  }
+
+  /** @param {string} src @param {string} dst @param {boolean} move @param {boolean} overwrite */
+  function transferRequest(src, dst, move, overwrite) {
+    const [url, method, body] = move
+      ? [fileActionUrl(src), "PATCH", { newPath: dst, overwrite }]
+      : [`${basePath}/api/files/copy`, "POST", { src, dst, overwrite }];
+    return fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  }
+
+  /**
+   * Move or copy items into `destDir`. The server answers 409 instead of
+   * replacing an existing destination, so those are collected and offered in
+   * the overwrite dialog. A copy into its own folder gets a "(copy)" name.
+   * @param {ClipItem[]} items @param {boolean} move @param {string} destDir @param {boolean} overwrite
+   */
+  async function transferItems(items, move, destDir, overwrite) {
+    const dirs = [destDir];
+    /** @type {ClipItem[]} */
+    const clashes = [];
+    const failures = [];
+    const names = [];
+    for (const item of items) {
+      const destPath = joinPath(destDir, item.name);
+      // Moving onto itself or into its own subtree is a no-op, not an error.
+      if (move && (destPath === item.path || isDescendantPath(destDir, item.path))) continue;
+      // Two items with one name would land on the same path and replace each other.
+      if (names.includes(item.name)) { failures.push(`${item.name}: another item with this name is already going there`); continue; }
+      names.push(item.name);
+      try {
+        let res;
+        if (!move && destPath === item.path) {
+          for (let n = 1; n <= 100 && (!res || res.status === 409); n++) {
+            res = await transferRequest(item.path, joinPath(destDir, copyName(item, n)), false, false);
+          }
+        } else {
+          res = await transferRequest(item.path, destPath, move, overwrite);
+        }
+        if (res.status === 409) clashes.push(item);
+        else if (!res.ok) throw new Error(await res.text());
+        else if (move) dirs.push(parentPath(item.path));
+      } catch (e) { failures.push(`${item.name}: ${e}`); }
+    }
+    if (failures.length) crudError = failures.length === 1 ? failures[0] : `${move ? "Move" : "Copy"} failed for ${failures.length} items — ${failures[0]}`;
+    if (clashes.length) {
+      conflicts = {
+        names: clashes.map(i => i.name),
+        what: move ? "moved" : "copied",
+        overwrite: () => transferItems(clashes, move, destDir, true),
+      };
+    }
+    await refreshDirs(dirs, true).catch(() => {});
+  }
+
+  // ── Upload ────────────────────────────────────────────────────────────────
+  // Each picked file is streamed in its own PUT; folder picks carry
+  // `webkitRelativePath`, so the server recreates the folder structure.
+  /** @typedef {{ path: string, file: File }} UploadItem */
+  /** @type {HTMLInputElement|undefined} */
+  let uploadFilesInput = $state();
+  /** @type {HTMLInputElement|undefined} */
+  let uploadFolderInput = $state();
+  let uploadStatus = $state("");
+  /** Items the server refused to replace, offered for overwrite.
+   * @type {{ names: string[], what: string, overwrite: () => Promise<void> }|null} */
+  let conflicts = $state(null);
+
+  /** Uploads land in the tree root. @param {HTMLInputElement|undefined} input */
+  function pickUpload(input) {
+    closeCtx();
+    if (!input || uploadStatus) return;
+    input.value = "";
+    input.click();
+  }
+
+  /** @param {Event & { currentTarget: HTMLInputElement }} e */
+  function onUploadPicked(e) {
+    const items = [...(e.currentTarget.files ?? [])]
+      .map(file => ({ path: joinPath(root, file.webkitRelativePath || file.name), file }));
+    if (items.length) void uploadItems(items, false);
+  }
+
+  /** @param {UploadItem[]} items @param {boolean} overwrite */
+  async function uploadItems(items, overwrite) {
+    /** @type {UploadItem[]} */
+    const clashes = [];
+    const failures = [];
+    for (const [i, item] of items.entries()) {
+      uploadStatus = `Uploading ${i + 1}/${items.length}: ${item.file.name}`;
+      const query = `path=${encodeURIComponent(item.path)}${overwrite ? "&overwrite=true" : ""}`;
+      try {
+        const res = await fetch(`${basePath}/api/files/upload?${query}`, { method: "PUT", body: item.file });
+        if (res.status === 409) clashes.push(item);
+        else if (!res.ok) failures.push(`${item.file.name}: ${await res.text()}`);
+      } catch (err) { failures.push(`${item.file.name}: ${err}`); }
+    }
+    uploadStatus = "";
+    if (failures.length) crudError = `Upload failed for ${failures.length} file(s) — ${failures[0]}`;
+    if (clashes.length) {
+      conflicts = {
+        names: clashes.map(i => i.file.webkitRelativePath || i.file.name),
+        what: "uploaded",
+        overwrite: () => uploadItems(clashes, true),
+      };
+    }
+    await refreshDir(root, true).catch(() => {});
   }
 
   // ── Drag move ─────────────────────────────────────────────────────────────
@@ -320,18 +489,7 @@
 
   async function moveNode(sourceNode, targetNode) {
     if (!sourceNode || !canMoveTo(sourceNode, targetNode)) return;
-    const sourceDir = parentPath(sourceNode.path);
-    const destDir = dropDirFor(targetNode);
-    const destPath = joinPath(destDir, sourceNode.name);
-    try {
-      const res = await fetch(fileActionUrl(sourceNode.path), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newPath: destPath }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      await refreshDirs([sourceDir, destDir], true);
-    } catch (e) { crudError = String(e); }
+    await transferItems([sourceNode], true, dropDirFor(targetNode), false);
   }
 
   function onNodeDragStart(e, node) {
@@ -396,6 +554,12 @@
   }
 
   function onDocClick() { if (ctxMenu) closeCtx(); }
+  /** @param {KeyboardEvent} e */
+  function onDocKeydown(e) {
+    if (e.key !== "Escape") return;
+    if (ctxMenu) closeCtx();
+    else selection = [];
+  }
 
   // ── External change watching ───────────────────────────────────────────────
   // The server watches these directories with inotify and pushes the paths that
@@ -511,7 +675,10 @@
   });
 </script>
 
-<svelte:document onclick={onDocClick} />
+<!-- Any right-click dismisses the open menu, in the capture phase so it runs
+     before handlers that stop the event (the terminal's own menu); a tree row
+     then reopens the menu for itself. -->
+<svelte:document onclick={onDocClick} onkeydown={onDocKeydown} oncontextmenucapture={onDocClick} />
 
 <div class="fm-sidebar">
   <!-- Header -->
@@ -546,6 +713,9 @@
     </button>
   </div>
 
+  {#if uploadStatus}
+    <div class="fm-status">{uploadStatus}</div>
+  {/if}
   {#if crudError}
     <div class="fm-error" role="button" tabindex="-1" onclick={() => crudError = ""} onkeydown={(e) => e.key === 'Enter' && (crudError = "")}>{crudError}</div>
   {:else if error}
@@ -581,46 +751,68 @@
 
 <!-- Context menu -->
 {#if ctxMenu}
-  <div class="fm-ctx" style:left="{ctxMenu.x}px" style:top="{ctxMenu.y}px" role="menu" tabindex="-1"
+  <div class="ctx-menu" bind:this={ctxEl} style:left="{ctxPos.x}px" style:top="{ctxPos.y}px" role="menu" tabindex="-1"
     onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && closeCtx()}>
-    <button class="fm-ctx-item" role="menuitem"
+    {#if ctxTargets.length > 1}
+      <!-- A multi-selection offers only the actions that apply to every row. -->
+      <button class="ctx-menu-item" role="menuitem" onclick={() => setClipboard('cut')}>Cut {ctxTargets.length} items</button>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => setClipboard('copy')}>Copy {ctxTargets.length} items</button>
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => { downloading = ctxTargets; closeCtx(); }}>
+        Download {ctxTargets.length} items
+      </button>
+    {:else}
+    <button class="ctx-menu-item" role="menuitem"
       onclick={() => { creating = { parentPath: ctxMenu.node?.is_dir ? ctxMenu.node.path : null, type: 'file', name: '' }; closeCtx(); }}>
       New File
     </button>
-    <button class="fm-ctx-item" role="menuitem"
+    <button class="ctx-menu-item" role="menuitem"
       onclick={() => { creating = { parentPath: ctxMenu.node?.is_dir ? ctxMenu.node.path : null, type: 'folder', name: '' }; closeCtx(); }}>
       New Folder
     </button>
     {#if ctxMenu.node}
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" role="menuitem"
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem"
         onclick={() => { renaming = { node: ctxMenu.node, name: ctxMenu.node.name }; closeCtx(); }}>
         Rename
       </button>
-      <button class="fm-ctx-item fm-ctx-danger" role="menuitem"
+      <button class="ctx-menu-item ctx-menu-danger" role="menuitem"
         onclick={() => { deleting = ctxMenu.node; closeCtx(); }}>
         Delete
       </button>
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" role="menuitem"
-        onclick={() => { clipboard = { action: 'cut', path: ctxMenu.node.path, name: ctxMenu.node.name }; closeCtx(); }}>
-        Cut
-      </button>
-      <button class="fm-ctx-item" role="menuitem"
-        onclick={() => { clipboard = { action: 'copy', path: ctxMenu.node.path, name: ctxMenu.node.name }; closeCtx(); }}>
-        Copy
-      </button>
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" role="menuitem"
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => setClipboard('cut')}>Cut</button>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => setClipboard('copy')}>Copy</button>
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem"
         onclick={() => { navigator.clipboard.writeText(ctxMenu.node.path); closeCtx(); }}>
         Copy Path
       </button>
-      <div class="fm-ctx-sep"></div>
+      <div class="ctx-menu-sep"></div>
     {/if}
-    <button class="fm-ctx-item" class:fm-ctx-disabled={!clipboard} role="menuitem"
+    <button class="ctx-menu-item" class:ctx-menu-disabled={!clipboard} role="menuitem"
       onclick={() => { if (clipboard) crudPaste(ctxMenu.node); }}>
       Paste
     </button>
+    {#if ctxMenu.node}
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem"
+        onclick={() => { downloading = ctxTargets; closeCtx(); }}>
+        Download
+      </button>
+    {:else}
+      <!-- Uploads target the root; offered only from the empty-area menu. -->
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" class:ctx-menu-disabled={!!uploadStatus} role="menuitem"
+        onclick={() => pickUpload(uploadFilesInput)}>
+        Upload Files…
+      </button>
+      <button class="ctx-menu-item" class:ctx-menu-disabled={!!uploadStatus} role="menuitem"
+        onclick={() => pickUpload(uploadFolderInput)}>
+        Upload Folder…
+      </button>
+    {/if}
+    {/if}
   </div>
 {/if}
 
@@ -638,12 +830,70 @@
   </div>
 {/if}
 
+<input hidden type="file" multiple bind:this={uploadFilesInput} onchange={onUploadPicked} />
+<input hidden type="file" webkitdirectory bind:this={uploadFolderInput} onchange={onUploadPicked} />
+
+<!-- Overwrite confirm (upload, paste, move) -->
+{#if conflicts}
+  <div class="fm-modal-backdrop" role="button" tabindex="-1" onclick={() => conflicts = null} onkeydown={(e) => e.key === 'Escape' && (conflicts = null)}>
+    <div class="fm-modal" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
+      <div class="fm-modal-title">
+        {conflicts.names.length === 1 ? `"${conflicts.names[0]}" already exists` : `${conflicts.names.length} items already exist`}
+      </div>
+      {#if conflicts.names.length > 1}
+        <ul class="fm-modal-list">
+          {#each conflicts.names.slice(0, 5) as name, i (i)}
+            <li>{name}</li>
+          {/each}
+          {#if conflicts.names.length > 5}
+            <li>…and {conflicts.names.length - 5} more</li>
+          {/if}
+        </ul>
+      {/if}
+      <div class="fm-modal-body">Replace with the {conflicts.what} {conflicts.names.length === 1 ? "item" : "items"}?</div>
+      <div class="fm-modal-actions">
+        <button class="fm-btn" use:focusButton onclick={() => conflicts = null}>Skip</button>
+        <button class="fm-btn fm-btn-danger" onclick={() => { const { overwrite } = conflicts; conflicts = null; void overwrite(); }}>Replace</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Download confirm -->
+{#if downloading}
+  <div class="fm-modal-backdrop" role="button" tabindex="-1" onclick={() => downloading = null} onkeydown={(e) => e.key === 'Escape' && (downloading = null)}>
+    <div class="fm-modal" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
+      {#if downloading.length === 1}
+        <div class="fm-modal-title">Download "{downloading[0].name}"?</div>
+        <div class="fm-modal-body">
+          {downloading[0].is_dir ? `The folder will be downloaded as ${downloading[0].name}.zip.` : "The file will be saved by your browser."}
+        </div>
+      {:else}
+        <div class="fm-modal-title">Download {downloading.length} items?</div>
+        <ul class="fm-modal-list">
+          {#each downloading.slice(0, 5) as node (node.path)}
+            <li title={node.path}>{node.name}{node.is_dir ? "/" : ""}</li>
+          {/each}
+          {#if downloading.length > 5}
+            <li>…and {downloading.length - 5} more</li>
+          {/if}
+        </ul>
+        <div class="fm-modal-body">They will be downloaded together as selection.zip.</div>
+      {/if}
+      <div class="fm-modal-actions">
+        <button class="fm-btn" onclick={() => downloading = null}>Cancel</button>
+        <button class="fm-btn fm-btn-primary" use:focusButton onclick={downloadNodes}>Download</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#snippet NodeRow({ node, depth })}
   {@const icon = node.is_dir ? null : fileIcon(node.name)}
   {@const isActive = activeTab === node.path}
-  {@const isCtxSelected = ctxMenu?.node?.path === node.path}
+  {@const isCtxSelected = ctxTargets.some(n => n.path === node.path)}
   {@const isRenaming = renaming?.node.path === node.path}
-  {@const isCut = clipboard?.action === 'cut' && clipboard.path === node.path}
+  {@const isCut = clipboard?.action === 'cut' && clipboard.items.some(i => i.path === node.path)}
   {@const isHidden = node.name.startsWith('.')}
   {@const isDragging = draggingNode?.path === node.path}
   {@const isDropTarget = dragTargetPath === node.path && draggingNode?.path !== node.path}
@@ -651,7 +901,8 @@
   <div
     class="fm-node"
     class:is-active={isActive}
-    class:is-ctx={isCtxSelected && !isActive}
+    class:is-ctx={isCtxSelected}
+    class:is-selected={isSelected(node)}
     class:is-dragging={isDragging}
     class:is-hidden={isHidden}
     class:is-drop-target={isDropTarget && !isInvalidDrop}
@@ -661,7 +912,7 @@
     role="button"
     tabindex="0"
     draggable={!isRenaming}
-    onclick={() => handleClick(node)}
+    onclick={(e) => onNodeClick(e, node)}
     oncontextmenu={(e) => onContextMenu(e, node)}
     onkeydown={(e) => e.key === "Enter" && handleClick(node)}
     ondragstart={(e) => onNodeDragStart(e, node)}
@@ -671,10 +922,10 @@
     ondragend={onNodeDragEnd}
   >
     <!-- Active file left border -->
-    {#if isActive}
-      <span class="fm-active-border"></span>
-    {:else if isCtxSelected}
+    {#if isCtxSelected}
       <span class="fm-ctx-border"></span>
+    {:else if isActive}
+      <span class="fm-active-border"></span>
     {/if}
 
     <!-- Indent guide lines -->

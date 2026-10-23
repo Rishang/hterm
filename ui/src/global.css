@@ -61,6 +61,8 @@
   --file-gray-bg: #abb2bf22;
   --scrollbar-size: 10px;
   --scrollbar-thumb: rgba(92,99,112,0.96);
+  --indent-guide: #3b4048;
+  --indent-guide-active: #6b7385;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; border: none; }
@@ -450,6 +452,8 @@ html, body {
   padding: 24px;
   background: rgba(0, 0, 0, 0.56);
 }
+/* Focused on open only to take keys from the terminal; no ring around the whole window. */
+.settings-window:focus { outline: none; }
 .settings-window {
   width: min(760px, 100%); height: min(560px, 100%);
   display: flex; flex-direction: column;
@@ -698,6 +702,9 @@ html, body {
   background: conic-gradient(var(--bg-surface) 25%, var(--bg-primary) 0 50%, var(--bg-surface) 0 75%, var(--bg-primary) 0) 0 0 / 16px 16px;
 }
 .fm-svg-preview img { flex: 1; min-width: 0; min-height: 0; object-fit: contain; }
+/* Raster images keep their natural size; only shrink to fit, never upscale. */
+.fm-raster-preview { overflow: auto; }
+.fm-raster-preview img { flex: none; margin: auto; max-width: 100%; max-height: 100%; }
 /* The global reset zeroes margins, padding and borders; restore readable prose. */
 .fm-md-preview > :first-child { margin-top: 0; }
 .fm-md-preview :is(p, ul, ol, pre, blockquote, table, .fm-mermaid) { margin-block: 0 1em; }
@@ -773,6 +780,7 @@ html, body {
   padding: 12px; color: var(--text-subtle); font-size: 12px; text-align: center;
 }
 .fm-error { padding: 8px 12px; color: var(--status-disconnected); font-size: 12px; }
+.fm-status { padding: 8px 12px; color: var(--text-subtle); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-error-main { padding: 16px; }
 
 /* ── Custom search panel (VS Code floating style) ──────────────────────────── */
@@ -1015,22 +1023,48 @@ html, body {
   padding: 0 4px; font-size: 12px; height: 18px;
 }
 
-.fm-ctx {
+/* Context menus (file explorer, terminal) */
+.ctx-menu {
   position: fixed; z-index: 200;
   background: var(--bg-surface); border: 1px solid var(--border-strong);
   box-shadow: 0 4px 16px var(--shadow-strong);
-  min-width: 160px; padding: 4px 0;
+  min-width: 160px; width: max-content; padding: 4px 0;
 }
-.fm-ctx-item {
+.ctx-menu-item {
   display: flex; align-items: center;
-  width: 100%; padding: 3px 12px; font-size: 12px; color: var(--text-primary);
+  width: 100%; padding: 3px 12px; font-size: 13px; color: var(--text-primary);
   cursor: pointer; user-select: none; text-align: left;
   background: none; border: none; font-family: inherit;
 }
-.fm-ctx-item:hover { background: var(--bg-context-hover); color: var(--text-inverse); }
-.fm-ctx-danger { color: var(--status-disconnected); }
-.fm-ctx-danger:hover { background: var(--bg-danger-muted); color: var(--status-disconnected); }
-.fm-ctx-sep { height: 1px; background: var(--border-strong); margin: 4px 0; }
+.ctx-menu-item:hover { background: var(--bg-context-hover); color: var(--text-inverse); }
+.ctx-menu-danger { color: var(--status-disconnected); }
+.ctx-menu-danger:hover { background: var(--bg-danger-muted); color: var(--status-disconnected); }
+.ctx-menu-sep { height: 1px; background: var(--border-strong); margin: 4px 0; }
+
+/* Terminal local echo overlay (TermTab) */
+.term-echo {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+/* Opaque cell background hides whatever the canvas has there (the real
+   cursor, an autosuggestion, a tail being shifted); guesses are dimmed to
+   mark them unconfirmed, shifted real text is not. */
+.term-echo span {
+  position: absolute;
+  white-space: pre;
+  text-align: center;
+  background: var(--bg-primary);
+  color: var(--echo-fg);
+}
+.term-echo span.guess {
+  color: color-mix(in srgb, var(--echo-fg) 70%, var(--bg-primary));
+}
+.term-echo .term-echo-cursor {
+  width: 2px;
+  background: var(--accent-cursor);
+}
 
 .fm-modal-backdrop {
   position: fixed; inset: 0; z-index: 300;
@@ -1044,11 +1078,20 @@ html, body {
 }
 .fm-modal-title { font-size: 14px; color: var(--text-primary); margin-bottom: 8px; }
 .fm-modal-body  { font-size: 12px; color: var(--text-subtle); margin-bottom: 16px; }
+.fm-modal-list {
+  margin: 0 0 12px; padding-left: 18px; max-width: 360px;
+  font-size: 12px; color: var(--text-primary);
+}
+.fm-modal-list li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fm-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .fm-btn { padding: 4px 14px; font-size: 12px; cursor: pointer; border: 1px solid var(--border-muted); background: var(--transparent); color: var(--text-primary); }
 .fm-btn:hover { background: var(--bg-context-hover); }
+/* Dialogs focus their default button programmatically, so show focus even without :focus-visible. */
+.fm-btn:focus { outline: 1px solid var(--accent); outline-offset: 2px; }
 .fm-btn-danger { border-color: var(--status-disconnected); color: var(--status-disconnected); }
 .fm-btn-danger:hover { background: var(--bg-danger-muted); }
+.fm-btn-primary { border-color: var(--accent); color: var(--accent); }
+.fm-btn-primary:hover { background: var(--bg-surface-hover); }
 
 .fm-active-border {
   position: absolute; left: 0; top: 0; bottom: 0;
@@ -1056,15 +1099,17 @@ html, body {
 }
 .fm-ctx-border {
   position: absolute; left: 0; top: 0; bottom: 0;
-  width: 2px; background: var(--accent); opacity: 0.6;
+  width: 2px; background: var(--accent);
 }
-.fm-node.is-ctx { background: var(--bg-surface-active); }
+/* Right-click target: outranks hover/active so the menu's row is unmistakable. */
+.fm-node.is-selected { background: var(--accent-dim-strong); }
+.fm-node.is-ctx { background: var(--accent-dim-strong); box-shadow: inset 0 0 0 1px var(--accent-dim-border); }
 .fm-empty-folder {
   font-size: 11px; color: var(--text-subtle); font-style: italic;
   height: 22px; display: flex; align-items: center;
 }
-.fm-ctx-disabled { color: var(--text-subtle) !important; cursor: default; }
-.fm-ctx-disabled:hover { background: var(--transparent) !important; color: var(--text-subtle) !important; }
+.ctx-menu-disabled { color: var(--text-subtle) !important; cursor: default; }
+.ctx-menu-disabled:hover { background: var(--transparent) !important; color: var(--text-subtle) !important; }
 
 @media (max-width: 760px) {
   .gs-bar { grid-template-columns: minmax(0, 1fr); }

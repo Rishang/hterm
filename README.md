@@ -36,6 +36,8 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 - Full Ghostty Web terminal integration
 - Custom themes & fonts
 - Real-time resize handling
+- Optional local echo for slow links (Settings → Terminal): typing shows immediately, dimmed until the server confirms it
+- Right-click menu: Copy, Paste, Select All, Find, Clear
 
 ### 🗂️ **Workspace & Editor**
 - File explorer that follows the active terminal directory
@@ -49,9 +51,10 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 ### 🔐 **Security First**
 - HTTP Basic Auth
 - Reverse proxy authentication
-- Read-only mode by default
+- Read-only mode by default (no input, writes or command execution)
 - TLS/SSL support
-- Origin checking
+- Cross-origin WebSocket upgrades are always refused (`Origin` must match `Host` or an `--allowed-host`)
+- DNS-rebinding guard: without Basic auth, only loopback, IP and `--allowed-host` names are served
 
 ### 🤖 **AI Integration**
 - **MCP Server** built-in
@@ -70,6 +73,8 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 | `bash` | Execute bash commands with verbose mode (set -x) |
 | `read_file` | Read file contents as UTF-8 text |
 | `write_file` | Create or overwrite files (max 100MB); for surgical edits, use `bash` (e.g. sed) |
+| `download_file` | Fetch a file, or a directory as zip, base64-encoded (max 8 MiB) |
+| `upload_file` | Write base64 content to a file, creating parent dirs; no overwrite unless asked (max 8 MiB) |
 
 ---
 
@@ -138,8 +143,10 @@ hterm -H :: -p 7681 -W
 # HTTP Basic Auth
 hterm -W -c myuser:mypassword
 
-# Reverse proxy auth (Nginx, Caddy, etc.)
-hterm -W -A X-Remote-User
+# Reverse proxy auth (Nginx, Caddy, etc.). Bind where only the proxy can reach
+# hterm, have the proxy strip client copies of the header, and allow the public
+# Host name it forwards.
+hterm -W -A X-Remote-User --allowed-host term.example.com
 
 # With TLS
 hterm -W -c admin:pass --ssl --ssl-cert server.crt --ssl-key server.key
@@ -273,8 +280,12 @@ docker run -p 8080:8080 \
 | `POST` | `/api/tools/call` | Execute MCP tool via REST |
 | `GET` / `POST` | `/api/files` | List or create files and directories |
 | `GET` | `/api/files/read` | Read a file for the editor |
-| `POST` | `/api/files/copy` | Copy a file or directory |
-| `PATCH` / `DELETE` | `/api/files/{path}` | Rename, move, or delete a file or directory |
+| `POST` | `/api/files/copy` | Copy a file or directory (409 if the destination exists, unless `overwrite`) |
+| `GET` | `/api/files/find` | List every file under the working directory (command palette) |
+| `GET` | `/api/files/search` | Search file contents with rg/grep (works in read-only mode) |
+| `GET` | `/api/files/download` | Download a file, or a directory or `?paths=[…]` selection as a zip archive |
+| `PUT` | `/api/files/upload` | Stream a request body to a file, max 4 GiB (`?overwrite=true` to replace) |
+| `PATCH` / `DELETE` | `/api/files/{path}` | Rename, move (409 if the destination exists, unless `overwrite`), or delete |
 | `GET` | `/api/files/watch` | Open an SSE filesystem-change stream (Linux inotify) |
 | `POST` | `/api/files/watch?sessionId={uuid}` | Replace a watch session's directories |
 | `POST` | `/api/lsp/completion` | Request language-server completions |
@@ -449,15 +460,16 @@ OPTIONS:
     -T, --terminal-type <TYPE>     TERM variable [default: xterm-256color]
 
     # Access Control
-    -W, --writable                 Allow client input (read-only by default)
+    -W, --writable                 Allow input, file writes and exec (read-only by default)
     -R, --readonly                 Force read-only mode
     -m, --max-clients <N>          Max concurrent clients [default: 0 = unlimited]
     -o, --once                     Accept one client and exit
     -q, --exit-no-conn             Exit when last client disconnects
-    -O, --check-origin             Reject different origin WebSocket upgrades
+    -O, --check-origin             Also refuse WebSocket upgrades without an Origin header
     -c, --credential <USER:PASS>   HTTP Basic Auth
-    -A, --auth-header <HEADER>     Reverse proxy auth header name
-    -a, --url-arg                  Allow URL query arguments
+    -A, --auth-header <HEADER>     Reverse proxy auth header name (Host guard stays on)
+        --allowed-host <HOST>      Serve this Host name without Basic auth (repeatable)
+    -a, --url-arg                  Allow URL query arguments (needs --writable)
 
     # Routing
     -b, --base-path <PATH>         URL prefix for reverse proxy

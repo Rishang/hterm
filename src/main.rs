@@ -41,7 +41,6 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 )]
 struct Cli {
     // ── Network ───────────────────────────────────────────────────────────────
-
     /// TCP port to listen on (default: 7681, 0 = random)
     #[arg(short = 'p', long = "port")]
     port: Option<u16>,
@@ -57,7 +56,6 @@ struct Cli {
     unix_socket: Option<String>,
 
     // ── Shell ─────────────────────────────────────────────────────────────────
-
     /// Shell executable (default: $SHELL or /bin/bash)
     #[arg(long)]
     shell: Option<String>,
@@ -71,8 +69,7 @@ struct Cli {
     terminal_type: Option<String>,
 
     // ── Access control ────────────────────────────────────────────────────────
-
-    /// Allow clients to write keystrokes to the TTY
+    /// Allow terminal input, file writes and command execution
     #[arg(short = 'W', long = "writable")]
     writable: bool,
 
@@ -92,7 +89,8 @@ struct Cli {
     #[arg(short = 'q', long = "exit-no-conn")]
     exit_no_conn: bool,
 
-    /// Reject WebSocket upgrades from a different origin
+    /// Also reject WebSocket upgrades without an Origin header (cross-origin
+    /// upgrades are always rejected)
     #[arg(short = 'O', long = "check-origin")]
     check_origin: bool,
 
@@ -101,17 +99,23 @@ struct Cli {
     credential: Option<String>,
 
     /// HTTP header name for reverse-proxy auth (e.g. X-Remote-User).
-    /// When set, the presence of this header (injected by an upstream proxy)
-    /// authenticates the request; Basic Auth is skipped entirely.
+    /// When set, a non-blank value in this header (injected by an upstream
+    /// proxy) authenticates the request; Basic Auth is skipped entirely. The
+    /// Host guard stays on, so pass the proxy's public name with --allowed-host
     #[arg(short = 'A', long = "auth-header")]
     auth_header: Option<String>,
 
+    /// Accept this Host name without Basic auth, and WebSocket upgrades from
+    /// pages on it (repeatable); loopback names and IPs are always accepted as Host
+    #[arg(long = "allowed-host")]
+    allowed_hosts: Vec<String>,
+
     /// Allow clients to pass extra shell arguments via ?arg=value in the URL
+    /// (ignored without --writable)
     #[arg(short = 'a', long = "url-arg")]
     url_arg: bool,
 
     // ── Routing ───────────────────────────────────────────────────────────────
-
     /// URL base-path for reverse-proxy deployments (e.g. /terminal)
     #[arg(short = 'b', long = "base-path")]
     base_path: Option<String>,
@@ -125,7 +129,6 @@ struct Cli {
     ping_interval: Option<u64>,
 
     // ── Privilege drop ────────────────────────────────────────────────────────
-
     /// Drop to this numeric user ID in each spawned shell child
     #[arg(short = 'u', long = "uid")]
     uid: Option<u32>,
@@ -135,7 +138,6 @@ struct Cli {
     gid: Option<u32>,
 
     // ── TLS ───────────────────────────────────────────────────────────────────
-
     /// Enable TLS (requires --ssl-cert and --ssl-key)
     #[arg(short = 'S', long)]
     ssl: bool,
@@ -149,7 +151,6 @@ struct Cli {
     ssl_key: Option<String>,
 
     // ── Misc ──────────────────────────────────────────────────────────────────
-
     /// Enable debug-level logging
     #[arg(short = 'd', long)]
     debug: bool,
@@ -192,31 +193,7 @@ async fn main() {
 
     // ── Config: JSON file first, then CLI overrides ───────────────────────────
     let mut cfg = AppConfig::load(&cli.config);
-
-    if let Some(p) = cli.port          { cfg.port          = p; }
-    if let Some(h) = cli.host          { cfg.host          = h; }
-    if let Some(s) = cli.unix_socket   { cfg.unix_socket   = s; }
-    if let Some(s) = cli.shell         { cfg.shell         = s; }
-    if !cli.command.is_empty()         { cfg.shell         = cli.command[0].clone(); }
-    if let Some(c) = cli.cwd           { cfg.cwd           = c; }
-    if let Some(t) = cli.terminal_type { cfg.terminal_type = t; }
-    if cli.writable                    { cfg.writable      = true; }
-    if cli.readonly                    { cfg.writable      = false; }
-    if let Some(m) = cli.max_clients   { cfg.max_clients   = m; }
-    if cli.once                        { cfg.once          = true; }
-    if cli.exit_no_conn                { cfg.exit_no_conn  = true; }
-    if cli.check_origin                { cfg.check_origin  = true; }
-    if let Some(c) = cli.credential    { cfg.credential    = c; }
-    if let Some(a) = cli.auth_header   { cfg.auth_header   = a; }
-    if cli.url_arg                     { cfg.url_arg       = true; }
-    if let Some(b) = cli.base_path     { cfg.base_path     = b.trim_end_matches('/').to_string(); }
-    if let Some(i) = cli.index         { cfg.index_path    = i; }
-    if let Some(p) = cli.ping_interval { cfg.ping_interval = p; }
-    if let Some(u) = cli.uid           { cfg.uid           = Some(u); }
-    if let Some(g) = cli.gid           { cfg.gid           = Some(g); }
-    if cli.ssl                         { cfg.ssl           = true; }
-    if let Some(c) = cli.ssl_cert      { cfg.ssl_cert      = c; }
-    if let Some(k) = cli.ssl_key       { cfg.ssl_key       = k; }
+    apply_cli_overrides(&mut cfg, cli);
 
     // ── Validation ────────────────────────────────────────────────────────────
     if !Path::new(&cfg.shell).exists() {
@@ -238,26 +215,35 @@ async fn main() {
     if !cfg.auth_header.is_empty() && !cfg.credential.is_empty() {
         tracing::warn!("Both auth_header and credential are set; auth_header takes precedence");
     }
+    if !cfg.auth_header.is_empty() && cfg.unix_socket.is_empty() && !is_loopback_host(&cfg.host) {
+        tracing::warn!(
+            host = %cfg.host,
+            "auth_header trusts any client that sets the header: bind to loopback or a Unix socket \
+             only the proxy can reach, and make the proxy strip client copies of the header"
+        );
+    }
+    if cfg.url_arg && !cfg.writable {
+        // URL arguments are command execution, which read-only mode forbids.
+        tracing::warn!("--url-arg is ignored without --writable");
+        cfg.url_arg = false;
+    }
 
     // ── Pre-compute Basic Auth expected header value ──────────────────────────
     // Build "Basic <base64(user:pass)>" once at startup so ws_handler can
     // authenticate with a single string comparison per upgrade — no per-request
     // allocations or decoding.
-    let expected_auth: Option<String> = if cfg.credential.is_empty() {
-        None
-    } else {
-        Some(format!("Basic {}", base64_encode(&cfg.credential)))
-    };
+    let expected_auth: Option<String> =
+        if cfg.credential.is_empty() { None } else { Some(format!("Basic {}", base64_encode(&cfg.credential))) };
 
     // ── Serialise /api/config response once ───────────────────────────────────
     // Leaked for a 'static reference valid for the server's lifetime, avoiding
     // per-request serialisation.
     let config_json: &'static str = Box::leak(
         serde_json::to_string(&ConfigResponse {
-            theme:    cfg.theme.clone(),
+            theme: cfg.theme.clone(),
             writable: cfg.writable,
-            url_arg:  cfg.url_arg,
-            cwd:      if cfg.cwd.is_empty() {
+            url_arg: cfg.url_arg,
+            cwd: if cfg.cwd.is_empty() {
                 std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "/".to_string())
             } else {
                 cfg.cwd.clone()
@@ -302,14 +288,14 @@ async fn main() {
     let cfg = Arc::new(cfg);
 
     let state = Arc::new(AppState {
-        config:        Arc::clone(&cfg),
-        client_count:  std::sync::atomic::AtomicU32::new(0),
+        config: Arc::clone(&cfg),
+        client_count: std::sync::atomic::AtomicU32::new(0),
         shutdown_tx,
         expected_auth,
         custom_index,
         mcp_transmitters: std::sync::RwLock::new(std::collections::HashMap::new()),
         watch_sessions: std::sync::RwLock::new(std::collections::HashMap::new()),
-        lsp:            std::sync::Mutex::new(lsp::LspManager::default()),
+        lsp: std::sync::Mutex::new(lsp::LspManager::default()),
     });
 
     // ── Router ────────────────────────────────────────────────────────────────
@@ -317,24 +303,24 @@ async fn main() {
 
     let app = Router::new()
         // UI & Documentation
-        .route(&format!("{}/",                 bp), get(serve_index))
-        .route(&format!("{}/openapi.json",      bp), get(serve_openapi))
-        .route(&format!("{}/static/{{*path}}",  bp), get(serve_asset))
-
+        .route(&format!("{}/", bp), get(serve_index))
+        .route(&format!("{}/openapi.json", bp), get(serve_openapi))
+        .route(&format!("{}/static/{{*path}}", bp), get(serve_asset))
         // REST API namespace
-        .route(&format!("{}/api/config",        bp), get(move || async move { serve_config(config_json).await }))
-        .route(&format!("{}/api/exec",          bp), post(serve_exec))
-        .nest(&format!("{}/api/tools",          bp), rest::router())
-        .nest(&format!("{}/api/files",          bp), rest::files_router())
-        .nest(&format!("{}/api/lsp",            bp), lsp::router())
-
+        .route(&format!("{}/api/config", bp), get(move || async move { serve_config(config_json).await }))
+        .route(&format!("{}/api/exec", bp), post(serve_exec))
+        .nest(&format!("{}/api/tools", bp), rest::router())
+        .nest(&format!("{}/api/files", bp), rest::files_router())
+        .nest(&format!("{}/api/lsp", bp), lsp::router())
         // WebSocket (industry standard convention)
-        .route(&format!("{}/ws",                bp), get(ws::ws_handler))
-
+        .route(&format!("{}/ws", bp), get(ws::ws_handler))
         // MCP Protocol namespace
-        .route(&format!("{}/mcp/sse",           bp), get(mcp::mcp_sse_handler))
-        .route(&format!("{}/mcp/message",       bp), post(mcp::mcp_message_handler))
-
+        .route(&format!("{}/mcp/sse", bp), get(mcp::mcp_sse_handler))
+        .route(
+            &format!("{}/mcp/message", bp),
+            post(mcp::mcp_message_handler).layer(axum::extract::DefaultBodyLimit::max(tools::MAX_TOOL_REQUEST_BODY)),
+        )
+        .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), host_guard))
         .with_state(state);
 
     // ── Serve ─────────────────────────────────────────────────────────────────
@@ -359,11 +345,37 @@ async fn main() {
 // ── Unix domain socket server ─────────────────────────────────────────────────
 
 #[cfg(unix)]
-async fn serve_unix(
-    app: Router,
-    cfg: &AppConfig,
-    shutdown_rx: tokio::sync::watch::Receiver<bool>,
-) {
+/// Overlays explicitly passed CLI flags onto the loaded JSON config.
+#[rustfmt::skip] // aligned table: one flag per row
+fn apply_cli_overrides(cfg: &mut AppConfig, cli: Cli) {
+    if let Some(p) = cli.port          { cfg.port          = p; }
+    if let Some(h) = cli.host          { cfg.host          = h; }
+    if let Some(s) = cli.unix_socket   { cfg.unix_socket   = s; }
+    if let Some(s) = cli.shell         { cfg.shell         = s; }
+    if !cli.command.is_empty()         { cfg.shell         = cli.command[0].clone(); }
+    if let Some(c) = cli.cwd           { cfg.cwd           = c; }
+    if let Some(t) = cli.terminal_type { cfg.terminal_type = t; }
+    if cli.writable                    { cfg.writable      = true; }
+    if cli.readonly                    { cfg.writable      = false; }
+    if let Some(m) = cli.max_clients   { cfg.max_clients   = m; }
+    if cli.once                        { cfg.once          = true; }
+    if cli.exit_no_conn                { cfg.exit_no_conn  = true; }
+    if cli.check_origin                { cfg.check_origin  = true; }
+    if let Some(c) = cli.credential    { cfg.credential    = c; }
+    if let Some(a) = cli.auth_header   { cfg.auth_header   = a; }
+    if !cli.allowed_hosts.is_empty()   { cfg.allowed_hosts.extend(cli.allowed_hosts); }
+    if cli.url_arg                     { cfg.url_arg       = true; }
+    if let Some(b) = cli.base_path     { cfg.base_path     = b.trim_end_matches('/').to_string(); }
+    if let Some(i) = cli.index         { cfg.index_path    = i; }
+    if let Some(p) = cli.ping_interval { cfg.ping_interval = p; }
+    if let Some(u) = cli.uid           { cfg.uid           = Some(u); }
+    if let Some(g) = cli.gid           { cfg.gid           = Some(g); }
+    if cli.ssl                         { cfg.ssl           = true; }
+    if let Some(c) = cli.ssl_cert      { cfg.ssl_cert      = c; }
+    if let Some(k) = cli.ssl_key       { cfg.ssl_key       = k; }
+}
+
+async fn serve_unix(app: Router, cfg: &AppConfig, shutdown_rx: tokio::sync::watch::Receiver<bool>) {
     use tokio::net::UnixListener;
 
     let path = &cfg.unix_socket;
@@ -377,7 +389,7 @@ async fn serve_unix(
     }
 
     let listener = match UnixListener::bind(path) {
-        Ok(l)  => l,
+        Ok(l) => l,
         Err(e) => {
             tracing::error!("Cannot bind Unix socket {}: {}", path, e);
             std::process::exit(1);
@@ -385,26 +397,16 @@ async fn serve_unix(
     };
 
     tracing::info!("hterm v{} listening on unix:{}{}", VERSION, path, cfg.base_path);
-    tracing::info!(
-        "Shell: {}  |  Terminal: {}  |  Writable: {}",
-        cfg.shell, cfg.terminal_type, cfg.writable
-    );
+    tracing::info!("Shell: {}  |  Terminal: {}  |  Writable: {}", cfg.shell, cfg.terminal_type, cfg.writable);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(make_shutdown_signal(shutdown_rx))
-        .await
-        .unwrap();
+    axum::serve(listener, app).with_graceful_shutdown(make_shutdown_signal(shutdown_rx)).await.unwrap();
 
     tracing::info!("Server stopped");
 }
 
 // ── TCP server (plain or TLS) ─────────────────────────────────────────────────
 
-async fn serve_tcp(
-    app: Router,
-    cfg: &AppConfig,
-    shutdown_rx: tokio::sync::watch::Receiver<bool>,
-) {
+async fn serve_tcp(app: Router, cfg: &AppConfig, shutdown_rx: tokio::sync::watch::Receiver<bool>) {
     // ── Build SocketAddr supporting both IPv4 and IPv6 ────────────────────────
     // IPv6 addresses must be wrapped in brackets for SocketAddr parsing:
     //   "::1"  →  "[::1]:7681"
@@ -416,7 +418,7 @@ async fn serve_tcp(
     };
 
     let addr: std::net::SocketAddr = match addr_str.parse() {
-        Ok(a)  => a,
+        Ok(a) => a,
         Err(e) => {
             tracing::error!("Invalid bind address '{}': {}", addr_str, e);
             std::process::exit(1);
@@ -425,7 +427,7 @@ async fn serve_tcp(
 
     // ── Bind the TCP socket first (may require root for port < 1024) ──────────
     let std_listener = match std::net::TcpListener::bind(addr) {
-        Ok(l)  => l,
+        Ok(l) => l,
         Err(e) => {
             tracing::error!("Cannot bind {}: {}", addr, e);
             std::process::exit(1);
@@ -437,7 +439,7 @@ async fn serve_tcp(
     // (must happen before privilege drop in case certs are root-readable only)
     let tls_config = if cfg.ssl {
         match axum_server::tls_rustls::RustlsConfig::from_pem_file(&cfg.ssl_cert, &cfg.ssl_key).await {
-            Ok(c)  => Some(c),
+            Ok(c) => Some(c),
             Err(e) => {
                 tracing::error!("Failed to load TLS certificate/key: {}", e);
                 std::process::exit(1);
@@ -449,10 +451,7 @@ async fn serve_tcp(
 
     let scheme = if cfg.ssl { "https" } else { "http" };
     tracing::info!("hterm v{} listening on {}://{}{}", VERSION, scheme, addr, cfg.base_path);
-    tracing::info!(
-        "Shell: {}  |  Terminal: {}  |  Writable: {}",
-        cfg.shell, cfg.terminal_type, cfg.writable
-    );
+    tracing::info!("Shell: {}  |  Terminal: {}  |  Writable: {}", cfg.shell, cfg.terminal_type, cfg.writable);
 
     // ── axum-server Handle for graceful shutdown ──────────────────────────────
     let handle = Handle::new();
@@ -500,36 +499,40 @@ async fn serve_index(
         return tools::unauthorized(&state.config);
     }
     if let Some(content) = state.custom_index {
-        axum::response::Html(content).into_response()
+        // A user-supplied index may rely on inline scripts, so it only gets the
+        // anti-framing directive.
+        ([(axum::http::header::CONTENT_SECURITY_POLICY, "frame-ancestors 'self'")], axum::response::Html(content))
+            .into_response()
     } else {
         if let Some(content) = Assets::get("index.html") {
-            return axum::response::Html(content.data).into_response();
+            return ([(axum::http::header::CONTENT_SECURITY_POLICY, INDEX_CSP)], axum::response::Html(content.data))
+                .into_response();
         }
         StatusCode::NOT_FOUND.into_response()
     }
 }
 
-async fn serve_asset(
-    axum::extract::Path(path): axum::extract::Path<String>,
-) -> impl IntoResponse {
+/// Defense in depth behind the markdown sanitizer: previewed files are
+/// untrusted and render same-origin, so only bundled scripts may run.
+/// `wasm-unsafe-eval` is required by ghostty-web's WebAssembly core; styles stay
+/// unrestricted because CodeMirror and mermaid inject them at runtime.
+/// `frame-ancestors` stops other sites framing the terminal (clickjacking).
+const INDEX_CSP: &str =
+    "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'";
+
+async fn serve_asset(axum::extract::Path(path): axum::extract::Path<String>) -> impl IntoResponse {
     match Assets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
             // Vite content-hashes every file under assets/, so a new build gets
             // new URLs and these can be cached forever. Unhashed files (sw.js,
             // manifest) must revalidate.
-            let cache = if path.starts_with("assets/") {
-                "public, max-age=31536000, immutable"
-            } else {
-                "no-cache"
-            };
+            let cache = if path.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };
             (
-                [
-                    (axum::http::header::CONTENT_TYPE, mime.as_ref()),
-                    (axum::http::header::CACHE_CONTROL, cache),
-                ],
+                [(axum::http::header::CONTENT_TYPE, mime.as_ref()), (axum::http::header::CACHE_CONTROL, cache)],
                 content.data,
-            ).into_response()
+            )
+                .into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -550,11 +553,9 @@ async fn serve_openapi() -> impl IntoResponse {
     });
 
     match *OPENAPI_JSON {
-        Some(json_str) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            json_str,
-        ).into_response(),
+        Some(json_str) => {
+            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "application/json")], json_str).into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -581,6 +582,10 @@ async fn serve_exec(
     // Use unified auth check
     if !tools::check_auth(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !cfg.writable {
+        return (StatusCode::FORBIDDEN, "Command execution is disabled (hterm is running in read-only mode).")
+            .into_response();
     }
 
     let mut command = Command::new(&cfg.shell);
@@ -629,14 +634,35 @@ async fn serve_exec(
             (StatusCode::OK, Json(res)).into_response()
         }
         Err(e) => {
-            let res = ExecResponse {
-                stdout: String::new(),
-                stderr: e,
-                status: None,
-            };
+            let res = ExecResponse { stdout: String::new(), stderr: e, status: None };
             (StatusCode::INTERNAL_SERVER_ERROR, Json(res)).into_response()
         }
     }
+}
+
+/// Refuses requests whose Host fails [`tools::host_allowed`] (DNS rebinding).
+async fn host_guard(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let host = tools::request_host(req.headers(), req.uri());
+    if tools::host_allowed(&state.config, host) {
+        return next.run(req).await;
+    }
+    let host = host.unwrap_or_default();
+    tracing::warn!(host, "request refused: unknown Host (possible DNS rebinding)");
+    let msg = if state.config.auth_header.is_empty() {
+        format!("Host '{host}' is not allowed without auth. Add its name with --allowed-host, or enable auth.")
+    } else {
+        format!("Host '{host}' is not allowed. Add the name the proxy forwards with --allowed-host.")
+    };
+    (StatusCode::FORBIDDEN, msg).into_response()
+}
+
+/// Whether a bind address only accepts connections from this machine.
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -664,8 +690,7 @@ async fn make_shutdown_signal(mut rx: tokio::sync::watch::Receiver<bool>) {
 /// from the configured `credential`, so `ws_handler` can authenticate with a
 /// single `==` comparison.
 fn base64_encode(input: &str) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let bytes = input.as_bytes();
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
@@ -674,7 +699,7 @@ fn base64_encode(input: &str) -> String {
         let b0 = chunk[0] as u32;
         let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
         let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let n  = (b0 << 16) | (b1 << 8) | b2;
+        let n = (b0 << 16) | (b1 << 8) | b2;
 
         out.push(TABLE[((n >> 18) & 63) as usize] as char);
         out.push(TABLE[((n >> 12) & 63) as usize] as char);

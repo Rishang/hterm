@@ -13,11 +13,11 @@ use crate::config::AppConfig;
 use crate::pty::PtySession;
 
 // ── Binary protocol constants (must match TermTab.svelte) ─────────────────────
-const MSG_INPUT:  u8 = 0;   // client → server: keystroke data
-const MSG_OUTPUT: u8 = 1;   // server → client: PTY output
-const MSG_RESIZE: u8 = 2;   // client → server: terminal resize (cols u16 BE, rows u16 BE)
-// 3 is reserved for the error frame the browser renders inline.
-const MSG_CWD:    u8 = 4;   // server → client: shell working directory (UTF-8 path)
+const MSG_INPUT: u8 = 0; // client → server: keystroke data
+const MSG_OUTPUT: u8 = 1; // server → client: PTY output
+const MSG_RESIZE: u8 = 2; // client → server: terminal resize (cols u16 BE, rows u16 BE)
+                          // 3 is reserved for the error frame the browser renders inline.
+const MSG_CWD: u8 = 4; // server → client: shell working directory (UTF-8 path)
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 
@@ -64,7 +64,8 @@ pub struct AppState {
     /// Uses a `std::sync::RwLock` because the lock is never held across `.await`
     /// points — only quick insert/remove/lookup operations.  This avoids the
     /// overhead of tokio's async lock machinery.
-    pub mcp_transmitters: std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<axum::response::sse::Event>>>,
+    pub mcp_transmitters:
+        std::sync::RwLock<std::collections::HashMap<String, tokio::sync::mpsc::Sender<axum::response::sse::Event>>>,
 
     /// Active file-explorer watch sessions, mapping session id to the channel
     /// that updates which directories that session watches. Removing an entry
@@ -95,70 +96,37 @@ enum PtyCmd {
 /// URL query parameters of the form `?arg=foo&arg=bar` are extracted here and
 /// forwarded to the shell's argv when `url_arg` is enabled in config.
 pub async fn ws_handler(
-    ws:              WebSocketUpgrade,
+    ws: WebSocketUpgrade,
     RawQuery(query): RawQuery,
-    headers:         HeaderMap,
-    State(state):    State<Arc<AppState>>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let cfg = &state.config;
 
     // ── Authentication ────────────────────────────────────────────────────────
-    //
-    // Two mutually exclusive modes, tried in order:
-    //
-    // 1. Reverse-proxy header auth (`auth_header` is set):
-    //    Trust the specified header value placed by the upstream proxy.
-    //    The *presence* of the header means "authenticated"; the value is the
-    //    remote username (logged but not validated here).
-    //
-    // 2. HTTP Basic Auth (`credential` is set):
-    //    Compare against the pre-built expected header string stored in
-    //    AppState — one string comparison, no per-request allocations.
-    //
-    // If neither is configured, all connections are accepted.
-    if !cfg.auth_header.is_empty() {
-        match headers.get(cfg.auth_header.as_str()) {
-            Some(user) => {
-                let name = user.to_str().unwrap_or("<non-utf8>");
-                tracing::debug!(proxy_user = name, "Proxy-authenticated connection");
-            }
-            None => {
-                tracing::warn!(
-                    auth_header = %cfg.auth_header,
-                    "WebSocket upgrade rejected: proxy auth header missing"
-                );
-                return StatusCode::UNAUTHORIZED.into_response();
-            }
-        }
-    } else if let Some(ref expected) = state.expected_auth {
-        if !check_basic_auth(&headers, expected) {
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
-    }
-
-    // ── Client-limit + once-mode guard ────────────────────────────────────────
-    // Use fetch_add to atomically check and increment, avoiding race conditions
-    let previous = state.client_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    if (cfg.max_clients > 0 && previous >= cfg.max_clients) || (cfg.once && previous > 0) {
-        // Revert the increment since we're rejecting this connection
-        state.client_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    // Shared with REST/MCP/LSP so the rule lives in one place. Plain 401: a
+    // WebSocket client cannot answer a Basic challenge.
+    if !crate::tools::check_auth(&state, &headers) {
+        tracing::warn!("WebSocket upgrade rejected: not authenticated");
+        return StatusCode::UNAUTHORIZED.into_response();
     }
 
     // ── Origin check ──────────────────────────────────────────────────────────
-    if cfg.check_origin {
-        let origin = headers.get("origin").and_then(|v| v.to_str().ok());
-        let host   = headers.get("host").and_then(|v| v.to_str().ok());
-        if let (Some(o), Some(h)) = (origin, host) {
-            // Strip scheme from Origin ("https://host:port" → "host:port") before
-            // comparing so that substrings like "evil-app.com" can't spoof "app".
-            let origin_authority = o.find("://").map(|i| &o[i + 3..]).unwrap_or(o);
-            if origin_authority != h {
-                tracing::warn!(origin = o, host = h, "WebSocket upgrade rejected: origin mismatch");
-                return StatusCode::FORBIDDEN.into_response();
-            }
-        }
+    // Always on: browsers apply no CORS to WebSockets, so this is the only thing
+    // stopping any website from opening a shell here with the user's cached
+    // credentials. Runs before a client slot is taken so rejects cannot leak it.
+    let origin = headers.get(axum::http::header::ORIGIN).and_then(|v| v.to_str().ok());
+    let host = crate::tools::request_host(&headers, &uri);
+    if !origin_allowed(cfg, origin, host) {
+        tracing::warn!(origin, host, "WebSocket upgrade rejected: origin mismatch");
+        return StatusCode::FORBIDDEN.into_response();
     }
+
+    // ── Client-limit + once-mode guard ────────────────────────────────────────
+    let Some(slot) = ClientSlot::acquire(&state) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
 
     // ── URL arg passthrough ───────────────────────────────────────────────────
     // Decode repeated `?arg=<value>` pairs from the query string and pass them
@@ -166,14 +134,59 @@ pub async fn ws_handler(
     //
     // Example: `ws://host/ws?arg=-c&arg=ls%20-la`
     //   → execve("/bin/bash", ["/bin/bash", "-c", "ls -la"], env)
-    let url_args: Vec<String> = if cfg.url_arg {
-        parse_url_args(query.as_deref().unwrap_or(""))
-    } else {
-        vec![]
-    };
+    // Extra argv is command execution, so read-only mode never honours it
+    // (startup also clears `url_arg` without `writable`; checked here too).
+    let url_args: Vec<String> =
+        if cfg.url_arg && cfg.writable { parse_url_args(query.as_deref().unwrap_or("")) } else { vec![] };
 
-    ws.on_upgrade(move |socket| handle_socket(socket, state, url_args))
-        .into_response()
+    // A failed handshake drops this callback, and with it the slot.
+    ws.on_upgrade(move |socket| handle_socket(socket, state, slot, url_args)).into_response()
+}
+
+/// Whether a WebSocket upgrade may proceed. A browser always sends `Origin`,
+/// so a present one must name this server: its authority equals `Host`, or its
+/// host name is in `allowed_hosts` (e.g. `localhost` for the Vite dev server).
+/// Browsers omit the scheme's default port from `Origin` while some proxies add
+/// it to `Host` (`$host:$server_port`), so it is ignored on both sides.
+/// Opaque origins (`null`) fail. A missing `Origin` means a non-browser client,
+/// which cannot ride the user's credentials; `check_origin` rejects it too.
+fn origin_allowed(cfg: &AppConfig, origin: Option<&str>, host: Option<&str>) -> bool {
+    let Some(origin) = origin else { return !cfg.check_origin };
+    let Some((scheme, authority)) = origin.split_once("://") else { return false };
+    let default_port = if scheme.eq_ignore_ascii_case("https") { ":443" } else { ":80" };
+    let authority_name = authority.strip_suffix(default_port).unwrap_or(authority);
+    if host.is_some_and(|h| authority_name.eq_ignore_ascii_case(h.strip_suffix(default_port).unwrap_or(h))) {
+        return true;
+    }
+    let name = match authority.rsplit_once(':') {
+        Some((name, port)) if !port.contains(']') => name,
+        _ => authority,
+    };
+    cfg.allowed_hosts.iter().any(|h| name.eq_ignore_ascii_case(h))
+}
+
+/// One reserved terminal slot in `client_count`. Released on drop, so every
+/// exit path (failed handshake, PTY spawn error, session end) gives it back.
+struct ClientSlot(Arc<AppState>);
+
+impl ClientSlot {
+    /// Atomically reserves a slot, or `None` when `max_clients` or `once` is
+    /// already satisfied.
+    fn acquire(state: &Arc<AppState>) -> Option<Self> {
+        let cfg = &state.config;
+        let previous = state.client_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let slot = Self(Arc::clone(state));
+        if (cfg.max_clients > 0 && previous >= cfg.max_clients) || (cfg.once && previous > 0) {
+            return None; // `slot` drops here and reverts the increment
+        }
+        Some(slot)
+    }
+}
+
+impl Drop for ClientSlot {
+    fn drop(&mut self) {
+        self.0.client_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 // ── Session handler ───────────────────────────────────────────────────────────
@@ -190,12 +203,12 @@ pub async fn ws_handler(
 ///
 /// `pty_main` owns the `PtySession` value directly — no `Arc` overhead.
 /// Pings are merged into `pty_main` via `select!` to avoid a 4th task.
-async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<String>) {
-    let cfg           = &state.config;
+async fn handle_socket(socket: WebSocket, state: Arc<AppState>, slot: ClientSlot, url_args: Vec<String>) {
+    let cfg = &state.config;
     let ping_interval = Duration::from_secs(cfg.ping_interval);
-    let writable      = cfg.writable;
+    let writable = cfg.writable;
 
-    // Count was already incremented in ws_handler, just read it for logging
+    // `slot` already counts this client; just read the total for logging.
     let count = state.client_count.load(std::sync::atomic::Ordering::Relaxed);
     tracing::info!(
         shell    = %cfg.shell,
@@ -204,19 +217,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
         "Terminal session started"
     );
 
-    let session = match PtySession::spawn(
-        &cfg.shell,
-        &url_args,
-        &cfg.cwd,
-        &cfg.terminal_type,
-        cfg.uid,
-        cfg.gid,
-    ) {
-        Ok(s)  => s,
+    let session = match PtySession::spawn(&cfg.shell, &url_args, &cfg.cwd, &cfg.terminal_type, cfg.uid, cfg.gid) {
+        Ok(s) => s,
         Err(e) => {
             tracing::error!("PTY spawn failed: {}", e);
-            state.client_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            return;
+            return; // dropping `slot` releases the count
         }
     };
 
@@ -225,7 +230,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
     // Outbound channel: pty_main → writer → ws_sink
     let (out_tx, mut out_rx) = mpsc::channel::<Message>(WS_OUT_CAP);
     // Inbound command channel: ws_reader → pty_main
-    let (cmd_tx, cmd_rx)     = mpsc::channel::<PtyCmd>(PTY_CMD_CAP);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<PtyCmd>(PTY_CMD_CAP);
 
     // ── Writer: owns ws_sink exclusively — zero lock contention ──────────────
     let writer = tokio::spawn(async move {
@@ -239,12 +244,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
     });
 
     // ── PTY main: owns PtySession, coalesces output, handles cmds + pings ────
-    let mut pty_main = tokio::spawn(pty_main_loop(
-        session,
-        cmd_rx,
-        out_tx.clone(),
-        ping_interval,
-    ));
+    let mut pty_main = tokio::spawn(pty_main_loop(session, cmd_rx, out_tx.clone(), ping_interval));
 
     // ── WS reader: minimal work — parse frames, forward PtyCmd ───────────────
     let mut ws_reader = tokio::spawn(async move {
@@ -289,8 +289,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
     drop(out_tx);
     let _ = writer.await;
 
-    // fetch_sub returns the *previous* value; subtract 1 for the current count.
-    let remaining = state.client_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) - 1;
+    drop(slot);
+    let remaining = state.client_count.load(std::sync::atomic::Ordering::SeqCst);
     tracing::info!(clients = remaining, "Terminal session ended");
 
     if cfg.once || (cfg.exit_no_conn && remaining == 0) {
@@ -306,9 +306,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, url_args: Vec<St
 /// 16 KiB per frame), handles incoming keystrokes/resize commands, and sends
 /// WebSocket keepalive pings — all in a single task.
 async fn pty_main_loop(
-    session:       PtySession,
-    mut cmd_rx:    mpsc::Receiver<PtyCmd>,
-    out_tx:        mpsc::Sender<Message>,
+    session: PtySession,
+    mut cmd_rx: mpsc::Receiver<PtyCmd>,
+    out_tx: mpsc::Sender<Message>,
     ping_interval: Duration,
 ) {
     let mut buf = [0u8; PTY_BUF_SIZE];
@@ -328,7 +328,9 @@ async fn pty_main_loop(
     // where the shell started, then only when the path actually changes.
     let mut last_cwd = String::new();
     if let Some(msg) = cwd_frame(&session, &mut last_cwd) {
-        if out_tx.send(msg).await.is_err() { return; }
+        if out_tx.send(msg).await.is_err() {
+            return;
+        }
     }
 
     'outer: loop {
@@ -415,9 +417,9 @@ async fn pty_main_loop(
 /// gone, or PTY write failed).
 async fn flush_coalesce(
     coalesce: &mut BytesMut,
-    tx:       &mpsc::Sender<Message>,
-    cmd_rx:   &mut mpsc::Receiver<PtyCmd>,
-    session:  &PtySession,
+    tx: &mpsc::Sender<Message>,
+    cmd_rx: &mut mpsc::Receiver<PtyCmd>,
+    session: &PtySession,
 ) -> bool {
     if coalesce.len() <= 1 {
         return false;
@@ -487,11 +489,7 @@ async fn apply_cmd(cmd: Option<PtyCmd>, session: &PtySession) -> bool {
 /// startup — this function performs a single string comparison with no
 /// allocations or decoding.
 pub fn check_basic_auth(headers: &HeaderMap, expected: &str) -> bool {
-    headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v == expected)
-        .unwrap_or(false)
+    headers.get("authorization").and_then(|v| v.to_str().ok()).map(|v| v == expected).unwrap_or(false)
 }
 
 /// Parse `?arg=<value>&arg=<value>` pairs from a raw query string.
@@ -510,7 +508,11 @@ fn parse_url_args(query: &str) -> Vec<String> {
         .split('&')
         .filter_map(|pair| {
             let (key, val) = pair.split_once('=')?;
-            if key == "arg" { Some(percent_decode(val)) } else { None }
+            if key == "arg" {
+                Some(percent_decode(val))
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -522,7 +524,10 @@ fn percent_decode(input: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'+' => { out.push(b' '); i += 1; }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
             b'%' if i + 2 < bytes.len() => {
                 if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
                     out.push((hi << 4) | lo);
@@ -532,7 +537,10 @@ fn percent_decode(input: &str) -> String {
                     i += 1;
                 }
             }
-            b => { out.push(b); i += 1; }
+            b => {
+                out.push(b);
+                i += 1;
+            }
         }
     }
     String::from_utf8_lossy(&out).into_owned()
@@ -544,6 +552,66 @@ fn hex_val(b: u8) -> Option<u8> {
         b'0'..=b'9' => Some(b - b'0'),
         b'a'..=b'f' => Some(b - b'a' + 10),
         b'A'..=b'F' => Some(b - b'A' + 10),
-        _            => None,
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_allowed_rejects_cross_site_upgrades() {
+        let mut cfg = AppConfig { allowed_hosts: vec!["localhost".into()], ..Default::default() };
+        let host = Some("127.0.0.1:7681");
+        for ok in [None, Some("http://127.0.0.1:7681"), Some("HTTPS://127.0.0.1:7681"), Some("http://localhost:5173")] {
+            assert!(origin_allowed(&cfg, ok, host), "{ok:?}");
+        }
+        assert!(origin_allowed(&cfg, Some("http://[::1]:7681"), Some("[::1]:7681")));
+        // Default port only on one side (proxy sends `$host:$server_port`).
+        assert!(origin_allowed(&cfg, Some("https://term.example"), Some("term.example:443")));
+        assert!(origin_allowed(&cfg, Some("http://term.example:80"), Some("term.example")));
+        assert!(!origin_allowed(&cfg, Some("https://term.example"), Some("term.example:80")));
+        for bad in ["https://evil.example", "http://127.0.0.1:7681.evil.example", "null", "http://127.0.0.1:8080"] {
+            assert!(!origin_allowed(&cfg, Some(bad), host), "{bad}");
+        }
+        assert!(!origin_allowed(&cfg, Some("http://evil.example"), None));
+        cfg.check_origin = true;
+        assert!(!origin_allowed(&cfg, None, host));
+    }
+
+    fn state_with(config: AppConfig) -> Arc<AppState> {
+        Arc::new(AppState {
+            config: Arc::new(config),
+            client_count: std::sync::atomic::AtomicU32::new(0),
+            shutdown_tx: tokio::sync::watch::channel(false).0,
+            expected_auth: None,
+            custom_index: None,
+            mcp_transmitters: Default::default(),
+            watch_sessions: Default::default(),
+            lsp: Default::default(),
+        })
+    }
+
+    /// Finding #8: every rejected or finished client must give its slot back,
+    /// or `--once` / `--max-clients` lock out the real user for good.
+    #[test]
+    fn client_slot_is_released_on_drop() {
+        let count = |s: &AppState| s.client_count.load(std::sync::atomic::Ordering::SeqCst);
+
+        let once = state_with(AppConfig { once: true, ..Default::default() });
+        let first = ClientSlot::acquire(&once).expect("first client");
+        assert!(ClientSlot::acquire(&once).is_none(), "--once admits a single client");
+        assert_eq!(count(&once), 1, "a refused acquire must not leak");
+        drop(first);
+        assert_eq!(count(&once), 0);
+        assert!(ClientSlot::acquire(&once).is_some(), "slot is reusable after release");
+
+        let max = state_with(AppConfig { max_clients: 2, ..Default::default() });
+        let slots = [ClientSlot::acquire(&max), ClientSlot::acquire(&max), ClientSlot::acquire(&max)];
+        assert_eq!(slots.iter().filter(|s| s.is_some()).count(), 2);
+        assert_eq!(count(&max), 2);
+        drop(slots);
+        assert_eq!(count(&max), 0);
     }
 }

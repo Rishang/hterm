@@ -6,12 +6,14 @@
   import SettingsWindow from "./SettingsWindow.svelte";
   import CommandPalette from "./CommandPalette.svelte";
   import GlobalSearch from "./GlobalSearch.svelte";
-  import { fileIcon } from "./fileIcon.js";
+  import { fileIcon, isImage } from "./fileIcon.js";
+  import { localEchoMode } from "./localEcho.js";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
   const LSP_SETTINGS_KEY = "hterm.lspServers";
   const EDITOR_SETTINGS_KEY = "hterm.editorSettings";
   const EXPLORER_SETTINGS_KEY = "hterm.explorerSettings";
+  const TERMINAL_SETTINGS_KEY = "hterm.terminalSettings";
   const GLOBAL_SEARCH_TAB_ID = "__hterm_global_search__";
 
   // FilePane pulls in CodeMirror and marked (~1 MB). Loading it on first file
@@ -120,6 +122,10 @@
       openFileTab(path, "", false, "");
       return;
     }
+    if (isImage(path)) {
+      openFileTab(path, "", true, "");
+      return;
+    }
     openFileTab(path, "", false, "", true);
     try {
       const res = await fetch(`${basePath}/api/files/read?path=${encodeURIComponent(path)}`);
@@ -190,6 +196,8 @@
   let autosave = $state({ enabled: true, delay: 1000 });
   /** On by default; a stored preference overrides it in `onMount`. */
   let explorer = $state({ autoCd: true });
+  /** @type {{ localEcho: import("./localEcho.js").LocalEchoMode }} */
+  let terminal = $state({ localEcho: "off" });
   /** Working directory last reported by each terminal tab, keyed by tab id. */
   let termCwds = $state({});
 
@@ -237,6 +245,11 @@
   function setExplorer(settings) {
     explorer = { autoCd: !!settings.autoCd };
     localStorage.setItem(EXPLORER_SETTINGS_KEY, JSON.stringify(explorer));
+  }
+
+  function setTerminal(settings) {
+    terminal = { localEcho: localEchoMode(settings.localEcho) };
+    localStorage.setItem(TERMINAL_SETTINGS_KEY, JSON.stringify(terminal));
   }
 
   function setTermCwd(id, cwd) {
@@ -508,6 +521,8 @@
       if (editorSettings && typeof editorSettings === "object") setAutosave(editorSettings);
       const explorerSettings = JSON.parse(localStorage.getItem(EXPLORER_SETTINGS_KEY) ?? "null");
       if (explorerSettings && typeof explorerSettings === "object") setExplorer(explorerSettings);
+      const terminalSettings = JSON.parse(localStorage.getItem(TERMINAL_SETTINGS_KEY) ?? "null");
+      if (terminalSettings && typeof terminalSettings === "object") setTerminal(terminalSettings);
     } catch { /* ignore malformed local settings */ }
     // Capture before terminal/CodeMirror can consume tab-switch shortcuts.
     window.addEventListener("keydown", onGlobalKeydown, { capture: true });
@@ -675,7 +690,7 @@
     </div>
 
     <ShortcutInfo bind:open={showShortcutHints} />
-    <SettingsWindow servers={lspServers} onchange={setLspServer} {autosave} onautosavechange={setAutosave} {explorer} onexplorerchange={setExplorer} />
+    <SettingsWindow servers={lspServers} onchange={setLspServer} {autosave} onautosavechange={setAutosave} {explorer} onexplorerchange={setExplorer} {terminal} onterminalchange={setTerminal} />
 
   </div>
 
@@ -696,7 +711,7 @@
         <section class="workspace-pane workspace-pane-terminal" class:hidden={isSearchTab(activeTab) || !(layoutMode === "split" || isTermTab(activeTab))} class:focused={activeTab === visibleTerminalTab()} style:flex-basis={layoutMode === "split" && splitOrientation !== "down" ? `${splitRatio * 100}%` : undefined} aria-label="Terminal pane" onpointerdown={focusTerminalPane}>
           {#each termTabs as tid (tid)}
             <div class="term-wrap" class:hidden={isSearchTab(activeTab) || !(layoutMode === "split" || isTermTab(activeTab)) || tid !== visibleTerminalTab()}>
-              <TermTab active={!isSearchTab(activeTab) && (layoutMode === "split" || isTermTab(activeTab)) && tid === visibleTerminalTab()} searchActive={activeTab === tid} layoutKey={`${layoutMode}:${splitOrientation}:${splitRatio}`} oncwd={(cwd) => setTermCwd(tid, cwd)} />
+              <TermTab active={!isSearchTab(activeTab) && (layoutMode === "split" || isTermTab(activeTab)) && tid === visibleTerminalTab()} searchActive={activeTab === tid} layoutKey={`${layoutMode}:${splitOrientation}:${splitRatio}`} localEcho={terminal.localEcho} oncwd={(cwd) => setTermCwd(tid, cwd)} />
             </div>
           {/each}
         </section>

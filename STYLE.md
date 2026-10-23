@@ -20,14 +20,14 @@
 
 Backend responsibilities are explicit: `config` models configuration, `pty` owns Unix PTYs, `ws` owns the terminal transport and `AppState`, `tools` owns reusable tools/authentication, `rest` owns HTTP tool/files routes, `watch` owns inotify-backed filesystem change notification for the explorer, `mcp` owns JSON-RPC-over-SSE, and `lsp` owns language-server pooling/bridge routes. REST and MCP share `tools::call_tool`; REST, MCP, and LSP share `tools::check_auth`. Extend shared behavior centrally instead of duplicating it per transport.
 
-The UI is component-first. `App.svelte` owns tabs, layout, persisted settings, global shortcuts, and file opening. Focused components own their interaction; reusable non-component logic is a named-export JavaScript module. `GlobalSearch.svelte` owns search/replace state and presentation while `globalSearch.js` owns command construction, parsing, limits, and text replacement. Browser and backend LSP language/server mappings must remain paired (`ui/src/autocomplete/lsp.js`, `src/lsp.rs`).
+The UI is component-first. `App.svelte` owns tabs, layout, persisted settings, global shortcuts, and file opening. Focused components own their interaction; reusable non-component logic is a named-export JavaScript module. `GlobalSearch.svelte` owns search/replace state and presentation while `globalSearch.js` owns the request, parsing, limits, and text replacement; `/api/files/search` builds the rg/grep arguments. Browser and backend LSP language/server mappings must remain paired (`ui/src/autocomplete/lsp.js`, `src/lsp.rs`).
 
 ### Shared conventions
 
 - Constrain external work: commands, files, LSP messages/sessions, channels, search results, and terminal buffering use limits, timeouts, or bounded queues. Search limits apply to both source lines and expanded occurrences; truncation must remain visible to callers.
 - Make resource ownership and cleanup explicit: PTYs, SSE sessions, editor views, observers, timers, sockets, and event listeners are disposed by their owners. The file explorer closes its filesystem-watch SSE session when hidden and reconnects when shown.
 - Keep filesystem watches demand-driven: watch only visible expanded directories, use bounded per-session and process-wide caps, and handle inotify descriptor removal/aliasing without dropping remaining paths.
-- Preserve security boundaries: read-only is default; authenticate before privileged work; check `writable` before mutation; normalize filesystem mutation paths; keep browser config separate from server secrets.
+- Preserve security boundaries: read-only is default; authenticate before privileged work; check `writable` before mutation or command execution (read-only features run fixed argv, never a shell); normalize filesystem mutation paths; keep browser config separate from server secrets.
 - Use maps/tables for extensible sets: tool definitions, language/server mappings, language loaders, file icons, and completion options.
 - Comments explain ownership, protocol rules, security/performance rationale, or non-obvious behavior. Long Rust/CSS files use concise section headings.
 
@@ -64,7 +64,7 @@ Established patterns: composition root plus feature routers; `Arc<AppState>`; ac
 
 ### Formatting, errors, and logging
 
-Follow rustfmt-shaped four-space formatting, trailing commas in multiline expressions, brace-grouped imports, and early returns. Preserve nearby vertical alignment in existing config/CLI blocks, but it is not global style. HTTP handler names end in `_handler`.
+Format with `cargo fmt` (configured by `rustfmt.toml`): four-space indentation, 120-column lines, trailing commas in multiline expressions, brace-grouped imports, and early returns. Aligned config/CLI tables (`config.rs` defaults, `apply_cli_overrides` in `main.rs`) are kept with `#[rustfmt::skip]`; do not hand-align elsewhere. HTTP handler names end in `_handler`.
 
 Authenticate first; for mutations check `writable`; validate/normalize inputs; then perform I/O. Keep a route family's existing response shape: successful typed JSON, status-only auth failures, JSON `{ "error": ... }`, and plain-text errors all exist. Low-level I/O uses `io::Result`; boundary helpers also use `Result<_, String>` when errors are rendered directly.
 
@@ -72,7 +72,7 @@ Do not hold `AppState` standard locks across `.await`. Use bounded channels, cap
 
 ```rust
 tracing::info!(tool = cmd_name, success = ok, "command finished");
-tracing::warn!(origin = o, host = h, "WebSocket upgrade rejected: origin mismatch");
+tracing::warn!(origin, host, "WebSocket upgrade rejected: origin mismatch");
 ```
 
 ### Configuration and dependencies
@@ -102,7 +102,7 @@ Extend CodeMirror language loading in `CodeEditor.svelte` through shared loader 
 
 ## CSS
 
-Keep product styling in `ui/src/global.css`; component-local styles are for integration host/layout needs. Group global rules by feature and prefix class families (`fm-*`, `cmdp-*`, `csb-*`, `lsp-*`, `tab-*`, `workspace-*`).
+Keep product styling in `ui/src/global.css`; component-local styles are for integration host/layout needs. Group global rules by feature and prefix class families (`fm-*`, `ctx-menu-*` for context menus, `term-*`, `cmdp-*`, `csb-*`, `lsp-*`, `tab-*`, `workspace-*`).
 
 Use semantic `:root` tokens (`--bg-*`, `--text-*`, `--accent-*`, `--border-*`, `--status-*`, file colors, shadows) instead of repeating literal colors. Terminal code reads the same tokens with `getComputedStyle`. Use flex/grid with `min-width: 0`/`min-height: 0` for nested panes, state classes or Svelte `class:` directives for states, and the existing `@media (max-width: 760px)` breakpoint for stacked layout.
 

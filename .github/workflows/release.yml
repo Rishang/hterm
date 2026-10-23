@@ -32,7 +32,7 @@ jobs:
           version: 10
 
       - name: Install Task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@v3
         with:
           version: 3.50.0
 
@@ -40,6 +40,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: rustfmt
 
       - name: Install cross
         uses: taiki-e/install-action@cross
@@ -52,6 +53,6 @@ jobs:
           mv target/${{ matrix.target }}/release/hterm hterm-${{ matrix.target }}
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: hterm-${{ matrix.target }}

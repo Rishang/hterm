@@ -25,7 +25,7 @@ use tokio::io::Interest;
 ///
 /// On [`Drop`] the child receives `SIGHUP` and is reaped via `waitpid`.
 pub struct PtySession {
-    master:    AsyncFd<OwnedFd>,
+    master: AsyncFd<OwnedFd>,
     child_pid: Pid,
 }
 
@@ -53,19 +53,17 @@ impl PtySession {
     /// 5. optionally `setgid(gid)` then `setuid(uid)` (privilege drop)
     /// 6. `execve(shell, argv, env)` — replace image with the shell
     pub fn spawn(
-        shell:      &str,
+        shell: &str,
         shell_args: &[String],
-        cwd:        &str,
-        term_type:  &str,
-        uid:        Option<u32>,
-        gid:        Option<u32>,
+        cwd: &str,
+        term_type: &str,
+        uid: Option<u32>,
+        gid: Option<u32>,
     ) -> io::Result<Self> {
-        let OpenptyResult { master, slave } = openpty(None, None)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let OpenptyResult { master, slave } =
+            openpty(None, None).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-        match unsafe { unistd::fork() }
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
-        {
+        match unsafe { unistd::fork() }.map_err(|e| io::Error::new(io::ErrorKind::Other, e))? {
             // ── Child ─────────────────────────────────────────────────────────
             ForkResult::Child => {
                 // Master fd is not needed in the child; drop it so the parent
@@ -164,8 +162,9 @@ impl PtySession {
                     }
                 }
 
-                let async_fd = AsyncFd::new(master)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                // SAFETY: `master` is an OwnedFd moved into the AsyncFd, so the fd stays
+                // open and unchanged until the AsyncFd drops it.
+                let async_fd = unsafe { AsyncFd::register(master) }.map_err(io::Error::from)?;
 
                 Ok(PtySession { master: async_fd, child_pid: child })
             }
@@ -180,10 +179,12 @@ impl PtySession {
         loop {
             let mut guard = self.master.ready(Interest::READABLE).await?;
             match guard.try_io(|fd| {
-                let n = unsafe {
-                    libc::read(fd.as_raw_fd(), buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-                };
-                if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
+                let n = unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+                if n < 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(n as usize)
+                }
             }) {
                 Ok(result) => return result,
                 Err(_would_block) => continue,
@@ -200,14 +201,13 @@ impl PtySession {
             let mut guard = self.master.ready(Interest::WRITABLE).await?;
             match guard.try_io(|fd| {
                 let remaining = &data[written..];
-                let n = unsafe {
-                    libc::write(
-                        fd.as_raw_fd(),
-                        remaining.as_ptr() as *const libc::c_void,
-                        remaining.len(),
-                    )
-                };
-                if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
+                let n =
+                    unsafe { libc::write(fd.as_raw_fd(), remaining.as_ptr() as *const libc::c_void, remaining.len()) };
+                if n < 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(n as usize)
+                }
             }) {
                 Ok(Ok(n)) => written += n,
                 Ok(Err(e)) => return Err(e),
@@ -236,7 +236,11 @@ impl PtySession {
     pub fn resize(&self, rows: u16, cols: u16) -> io::Result<()> {
         let ws = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
         let ret = unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
-        if ret < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+        if ret < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 }
 
