@@ -1,14 +1,35 @@
 <script>
   import LspSettings from "./LspSettings.svelte";
+  import { LOCAL_ECHO_MODES } from "./localEcho.js";
 
-  /** @type {{ servers?: Record<string, string>, onchange?: (language: string, server: string) => void, autosave?: { enabled: boolean, delay: number }, onautosavechange?: (settings: { enabled: boolean, delay: number }) => void, explorer?: { autoCd: boolean }, onexplorerchange?: (settings: { autoCd: boolean }) => void }} */
-  let { servers = {}, onchange, autosave = { enabled: true, delay: 1000 }, onautosavechange, explorer = { autoCd: true }, onexplorerchange } = $props();
+  /** @type {{ servers?: Record<string, string>, onchange?: (language: string, server: string) => void, autosave?: { enabled: boolean, delay: number }, onautosavechange?: (settings: { enabled: boolean, delay: number }) => void, explorer?: { autoCd: boolean }, onexplorerchange?: (settings: { autoCd: boolean }) => void, terminal?: { localEcho: import("./localEcho.js").LocalEchoMode }, onterminalchange?: (settings: { localEcho: import("./localEcho.js").LocalEchoMode }) => void }} */
+  let { servers = {}, onchange, autosave = { enabled: true, delay: 1000 }, onautosavechange, explorer = { autoCd: true }, onexplorerchange, terminal = { localEcho: "off" }, onterminalchange } = $props();
   let open = $state(false);
   let section = $state("lsp");
+  /** @type {HTMLElement|undefined} */
+  let dialogEl = $state();
+  /** Focus before the dialog opened (usually the terminal), restored on close. */
+  let returnFocus = null;
 
-  function close() { open = false; }
+  // Take focus on open, so keys don't keep going to the terminal behind it.
+  $effect(() => {
+    if (!dialogEl) return;
+    returnFocus = document.activeElement;
+    dialogEl.focus();
+  });
+
+  function close() {
+    open = false;
+    if (returnFocus instanceof HTMLElement) returnFocus.focus();
+    returnFocus = null;
+  }
+  /** Capture phase: Escape closes the dialog wherever focus is, and never
+   * reaches the terminal or editor behind it. */
   function onKeydown(event) {
-    if (event.key === "Escape") close();
+    if (!open || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    close();
   }
   function onBackdropClick(event) {
     if (event.target === event.currentTarget) close();
@@ -16,6 +37,8 @@
 </script>
 
 <div class="tab-bar-actions">
+  <!-- A click doesn't move focus onto the button, so closing the dialog returns
+       focus to what had it before (usually the terminal). -->
   <button
     class="tab-info-btn"
     class:active={open}
@@ -23,6 +46,7 @@
     title="Settings"
     aria-label="Open settings"
     aria-expanded={open}
+    onmousedown={(e) => e.preventDefault()}
     onclick={() => { open = true; }}>
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="8" cy="8" r="2.2"/>
@@ -31,9 +55,11 @@
   </button>
 </div>
 
+<svelte:document onkeydowncapture={onKeydown} />
+
 {#if open}
-  <div class="settings-backdrop" role="presentation" onclick={onBackdropClick} onkeydown={onKeydown}>
-    <div class="settings-window" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1">
+  <div class="settings-backdrop" role="presentation" onclick={onBackdropClick}>
+    <div class="settings-window" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1" bind:this={dialogEl}>
       <header class="settings-header">
         <h2>Settings</h2>
         <button type="button" class="settings-close" aria-label="Close settings" onclick={close}>×</button>
@@ -43,6 +69,7 @@
           <button type="button" class:active={section === "lsp"} onclick={() => { section = "lsp"; }}>Language Servers</button>
           <button type="button" class:active={section === "autosave"} onclick={() => { section = "autosave"; }}>Autosave</button>
           <button type="button" class:active={section === "explorer"} onclick={() => { section = "explorer"; }}>File Explorer</button>
+          <button type="button" class:active={section === "terminal"} onclick={() => { section = "terminal"; }}>Terminal</button>
         </nav>
         <main class="settings-content">
           {#if section === "lsp"}
@@ -68,6 +95,15 @@
               <span>Follow the active terminal's directory</span>
             </label>
             <p class="settings-description">When enabled, the tree points at the working directory of whichever terminal tab is on screen and follows it as you <code>cd</code>. Switching terminal tabs re-points the tree. Your manually pinned path is remembered and restored when this is turned off.</p>
+          {:else if section === "terminal"}
+            <h3>Terminal</h3>
+            <p class="settings-description">Local echo draws what you type immediately, dimmed, instead of waiting for the server to echo it back. It helps over slow links such as tunnels; the dimmed text turns normal once the server confirms it. Full-screen programs and prompts that hide input, such as passwords, are never predicted.</p>
+            {#each LOCAL_ECHO_MODES as { value, label } (value)}
+              <label class="settings-check">
+                <input type="radio" name="local-echo" {value} checked={terminal.localEcho === value} onchange={() => onterminalchange?.({ ...terminal, localEcho: value })} />
+                <span>{label}</span>
+              </label>
+            {/each}
           {/if}
         </main>
       </div>

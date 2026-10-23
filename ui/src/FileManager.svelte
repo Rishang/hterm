@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { fileIcon } from "./fileIcon.js";
+  import { placeContextMenu } from "./contextMenu.js";
 
   /** @type {{ activeTab: string, openFileByPath: Function, visible?: boolean, autoCd?: boolean, terminalCwd?: string, root?: string }} */
   let { activeTab, openFileByPath, visible = true, autoCd = true, terminalCwd = "", root = $bindable("/") } = $props();
@@ -261,15 +262,8 @@
   let ctxEl = $state();
   let ctxPos = $state({ x: 0, y: 0 });
 
-  // Open at the cursor; where the menu's measured size would overflow, flip it
-  // to the other side of the cursor like a native menu, so it stays anchored to
-  // the clicked row instead of drifting over its neighbours.
   $effect(() => {
-    if (!ctxMenu || !ctxEl) return;
-    const { width, height } = ctxEl.getBoundingClientRect();
-    /** @param {number} at @param {number} size @param {number} limit */
-    const place = (at, size, limit) => Math.max(4, at + size + 4 > limit ? at - size : at);
-    ctxPos = { x: place(ctxMenu.x, width, window.innerWidth), y: place(ctxMenu.y, height, window.innerHeight) };
+    if (ctxMenu && ctxEl) ctxPos = placeContextMenu(ctxMenu.x, ctxMenu.y, ctxEl);
   });
 
   async function crudCreate() {
@@ -681,9 +675,10 @@
   });
 </script>
 
-<!-- Tree rows stop contextmenu propagation, so a right-click reaching the
-     document came from elsewhere and should dismiss the open menu. -->
-<svelte:document onclick={onDocClick} onkeydown={onDocKeydown} oncontextmenu={onDocClick} />
+<!-- Any right-click dismisses the open menu, in the capture phase so it runs
+     before handlers that stop the event (the terminal's own menu); a tree row
+     then reopens the menu for itself. -->
+<svelte:document onclick={onDocClick} onkeydown={onDocKeydown} oncontextmenucapture={onDocClick} />
 
 <div class="fm-sidebar">
   <!-- Header -->
@@ -756,63 +751,63 @@
 
 <!-- Context menu -->
 {#if ctxMenu}
-  <div class="fm-ctx" bind:this={ctxEl} style:left="{ctxPos.x}px" style:top="{ctxPos.y}px" role="menu" tabindex="-1"
+  <div class="ctx-menu" bind:this={ctxEl} style:left="{ctxPos.x}px" style:top="{ctxPos.y}px" role="menu" tabindex="-1"
     onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && closeCtx()}>
     {#if ctxTargets.length > 1}
       <!-- A multi-selection offers only the actions that apply to every row. -->
-      <button class="fm-ctx-item" role="menuitem" onclick={() => setClipboard('cut')}>Cut {ctxTargets.length} items</button>
-      <button class="fm-ctx-item" role="menuitem" onclick={() => setClipboard('copy')}>Copy {ctxTargets.length} items</button>
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" role="menuitem" onclick={() => { downloading = ctxTargets; closeCtx(); }}>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => setClipboard('cut')}>Cut {ctxTargets.length} items</button>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => setClipboard('copy')}>Copy {ctxTargets.length} items</button>
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => { downloading = ctxTargets; closeCtx(); }}>
         Download {ctxTargets.length} items
       </button>
     {:else}
-    <button class="fm-ctx-item" role="menuitem"
+    <button class="ctx-menu-item" role="menuitem"
       onclick={() => { creating = { parentPath: ctxMenu.node?.is_dir ? ctxMenu.node.path : null, type: 'file', name: '' }; closeCtx(); }}>
       New File
     </button>
-    <button class="fm-ctx-item" role="menuitem"
+    <button class="ctx-menu-item" role="menuitem"
       onclick={() => { creating = { parentPath: ctxMenu.node?.is_dir ? ctxMenu.node.path : null, type: 'folder', name: '' }; closeCtx(); }}>
       New Folder
     </button>
     {#if ctxMenu.node}
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" role="menuitem"
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem"
         onclick={() => { renaming = { node: ctxMenu.node, name: ctxMenu.node.name }; closeCtx(); }}>
         Rename
       </button>
-      <button class="fm-ctx-item fm-ctx-danger" role="menuitem"
+      <button class="ctx-menu-item ctx-menu-danger" role="menuitem"
         onclick={() => { deleting = ctxMenu.node; closeCtx(); }}>
         Delete
       </button>
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" role="menuitem" onclick={() => setClipboard('cut')}>Cut</button>
-      <button class="fm-ctx-item" role="menuitem" onclick={() => setClipboard('copy')}>Copy</button>
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" role="menuitem"
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => setClipboard('cut')}>Cut</button>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => setClipboard('copy')}>Copy</button>
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem"
         onclick={() => { navigator.clipboard.writeText(ctxMenu.node.path); closeCtx(); }}>
         Copy Path
       </button>
-      <div class="fm-ctx-sep"></div>
+      <div class="ctx-menu-sep"></div>
     {/if}
-    <button class="fm-ctx-item" class:fm-ctx-disabled={!clipboard} role="menuitem"
+    <button class="ctx-menu-item" class:ctx-menu-disabled={!clipboard} role="menuitem"
       onclick={() => { if (clipboard) crudPaste(ctxMenu.node); }}>
       Paste
     </button>
     {#if ctxMenu.node}
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" role="menuitem"
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem"
         onclick={() => { downloading = ctxTargets; closeCtx(); }}>
         Download
       </button>
     {:else}
       <!-- Uploads target the root; offered only from the empty-area menu. -->
-      <div class="fm-ctx-sep"></div>
-      <button class="fm-ctx-item" class:fm-ctx-disabled={!!uploadStatus} role="menuitem"
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" class:ctx-menu-disabled={!!uploadStatus} role="menuitem"
         onclick={() => pickUpload(uploadFilesInput)}>
         Upload Files…
       </button>
-      <button class="fm-ctx-item" class:fm-ctx-disabled={!!uploadStatus} role="menuitem"
+      <button class="ctx-menu-item" class:ctx-menu-disabled={!!uploadStatus} role="menuitem"
         onclick={() => pickUpload(uploadFolderInput)}>
         Upload Folder…
       </button>

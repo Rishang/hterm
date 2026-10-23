@@ -102,7 +102,7 @@ Extend CodeMirror language loading in `CodeEditor.svelte` through shared loader 
 
 ## CSS
 
-Keep product styling in `ui/src/global.css`; component-local styles are for integration host/layout needs. Group global rules by feature and prefix class families (`fm-*`, `cmdp-*`, `csb-*`, `lsp-*`, `tab-*`, `workspace-*`).
+Keep product styling in `ui/src/global.css`; component-local styles are for integration host/layout needs. Group global rules by feature and prefix class families (`fm-*`, `ctx-menu-*` for context menus, `term-*`, `cmdp-*`, `csb-*`, `lsp-*`, `tab-*`, `workspace-*`).
 
 Use semantic `:root` tokens (`--bg-*`, `--text-*`, `--accent-*`, `--border-*`, `--status-*`, file colors, shadows) instead of repeating literal colors. Terminal code reads the same tokens with `getComputedStyle`. Use flex/grid with `min-width: 0`/`min-height: 0` for nested panes, state classes or Svelte `class:` directives for states, and the existing `@media (max-width: 760px)` breakpoint for stacked layout.
 

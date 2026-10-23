@@ -15,9 +15,11 @@
   import { onDestroy } from "svelte";
   import { Terminal } from "ghostty-web";
   import FindBar from "./FindBar.svelte";
+  import { createLocalEcho } from "./localEcho.js";
+  import { placeContextMenu } from "./contextMenu.js";
 
-  /** @type {{ active: boolean, searchActive?: boolean, layoutKey?: string, oncwd?: (cwd: string) => void }} */
-  let { active, searchActive = active, layoutKey = "", oncwd } = $props();
+  /** @type {{ active: boolean, searchActive?: boolean, layoutKey?: string, localEcho?: import("./localEcho.js").LocalEchoMode, oncwd?: (cwd: string) => void }} */
+  let { active, searchActive = active, layoutKey = "", localEcho: localEchoMode = "off", oncwd } = $props();
 
   const MSG_INPUT = 0, MSG_OUTPUT = 1, MSG_RESIZE = 2, MSG_ERROR = 3, MSG_CWD = 4;
   const RECONNECT_DELAY_MS = 1000;
@@ -49,18 +51,29 @@
   /** @type {{ row: number, column: number, length: number }[]} */
   let findMatches = [];
   let findBar = $state(null);
+  /** Open right-click menu: cursor position and the selection it was opened on. */
+  let menu = $state(null);
+  /** @type {HTMLElement|undefined} */
+  let menuEl = $state();
+  let menuPos = $state({ x: 0, y: 0 });
   /** @type {WebSocket | null} */
   let ws = null;
   let reconnectDelay = RECONNECT_DELAY_MS;
   /** Pending `setTimeout` ids, keyed by purpose. @type {Record<string, number|null>} */
-  const timers = { reconnect: null, initialFit: null, ptyResize: null, shiftSelection: null };
+  const timers = { reconnect: null, initialFit: null, ptyResize: null, shiftSelection: null, echoTimeout: null };
   /** Pending `requestAnimationFrame` ids, keyed by purpose. @type {Record<string, number|null>} */
-  const rafs = { flush: null, fit: null };
+  const rafs = { flush: null, fit: null, echo: null };
+  /** Typed-character predictions for this terminal (see localEcho.js). @type {ReturnType<typeof createLocalEcho>|null} */
+  let echoPredictor = null;
+  /** Predicted characters drawn over the canvas until the server echoes them. */
+  let echoView = $state(null);
   /** Teardown callbacks for everything registered during initialization. @type {(() => void)[]} */
   const cleanups = [];
   /** @type {Uint8Array[]} */
   let pendingOutput = [];
   let pendingOutputBytes = 0;
+  /** When the oldest queued output chunk arrived. */
+  let pendingSince = 0;
   /** Whether a socket has opened before, so the next open is a reconnect. */
   let hadSession = false;
   let lastPtyResizeAt = 0;
@@ -229,6 +242,7 @@
       if (dims.cols <= 0 || dims.rows <= 0) return false;
       if (term.cols !== dims.cols || term.rows !== dims.rows) {
         term.resize(dims.cols, dims.rows);
+        resetEcho();
         schedulePtyResize(dims.cols, dims.rows);
       }
       return true;
@@ -372,7 +386,8 @@
     const cell = mouseCell(e);
     const button = e.button >= 0 && e.button <= 2 ? e.button : null;
     if (!cell || !isCanvasEvent(e) || button === null) return;
-    blockSelection = null;
+    // A right-click keeps the block selection for the menu's Copy.
+    if (button !== 2) blockSelection = null;
     if (button === 0 && e.altKey) {
       selectingBlock = true;
       blockSelectionStart = cell;
@@ -382,6 +397,7 @@
       return;
     }
     if (!hasMouseTracking()) return;
+    if (button === 2 && e.shiftKey) return; // opens the terminal menu instead
     clearShiftSelection();
     if (button === 0 && e.shiftKey) {
       selectingWithShift = true;
@@ -468,9 +484,13 @@
     const clientY = bounds.top + (Math.max(0, Math.min(term.rows - 1, viewportRow)) + 0.5) * height;
     // Ghostty Web's public select() uses viewport coordinates as absolute rows.
     // Its native pointer path converts them correctly when scrollback is present.
+    // That path also focuses the terminal, which would pull typing out of the
+    // find box mid-query, so focus goes back where it was.
+    const focused = document.activeElement;
     canvas.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: x(start), clientY }));
     canvas.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, buttons: 1, clientX: x(end), clientY }));
     document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: x(end), clientY }));
+    if (focused instanceof HTMLElement && document.activeElement !== focused) focused.focus();
   }
 
   function reportClick(e) {
@@ -487,9 +507,57 @@
     if (e.detail === 3 && e.button === 0) selectTerminalLine(e.clientY);
   }
 
+  /** The browser's own menu only offers canvas actions (Save image as...), so
+   * the canvas gets a terminal menu instead. Apps with mouse tracking receive
+   * the right-click; Shift+right-click still opens the menu, as in native terminals. */
   function reportContextMenu(e) {
-    if (!hasMouseTracking() || !isCanvasEvent(e)) return;
+    // Listens on the tab's wrapper, so the margins around the canvas count too;
+    // the find bar keeps the browser's menu for its text box.
+    if (e.target.closest?.(".term-find") || menuEl?.contains(e.target)) return;
     consumeMouseEvent(e);
+    if (isCanvasEvent(e) && hasMouseTracking() && !e.shiftKey) return;
+    menu = { x: e.clientX, y: e.clientY, selection: selectedText(), fullScreen: term.buffer.active.type !== "normal" };
+  }
+
+  $effect(() => {
+    if (menu && menuEl) menuPos = placeContextMenu(menu.x, menu.y, menuEl);
+  });
+
+  /** `action` gets the menu it was chosen from (closed by then). Find keeps
+   * focus in its own search box; everything else returns it to the terminal. */
+  function runMenuAction(action, refocus = true) {
+    const opened = menu;
+    menu = null;
+    action(opened);
+    if (refocus) term?.focus();
+  }
+
+  function closeMenuOutside(e) {
+    if (menu && !menuEl?.contains(e.target)) menu = null;
+  }
+
+  /** Any key closes the menu, like a native one. Runs in the capture phase,
+   * before Ghostty sees the key, so Escape only closes it and never reaches
+   * the shell. */
+  function closeMenuOnKey(e) {
+    if (!menu) return;
+    menu = null;
+    if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); }
+  }
+
+  /** Clear the screen and scrollback but keep the prompt. Ghostty's own
+   * clear() blanks the screen behind the shell's back, prompt and all, and
+   * keeping just the cursor row loses the top of a multi-line prompt. So the
+   * shell redraws it: Ctrl-L is its clear-screen key (zsh, bash, fish, and
+   * readline REPLs), and the scrollback is dropped here. */
+  function clearTerminal() {
+    term.write("\x1b[3J");
+    sendBinary(MSG_INPUT, "\x0c");
+    resetEcho();
+  }
+
+  function pasteFromClipboard() {
+    navigator.clipboard.readText().then(pasteText).catch(() => {});
   }
 
   function reportWheelEvent(e) {
@@ -509,12 +577,21 @@
     if (!disposed && term?.hasFocusEvents()) sendBinary(MSG_INPUT, sequence);
   }
 
+  /** Paste through Ghostty (bracketed when the program asked for it). Its
+   * onData fires synchronously, flagged so local echo never predicts a paste. */
+  let pasting = false;
+  function pasteText(text) {
+    if (!text || !term) return;
+    pasting = true;
+    try { term.paste(text); } finally { pasting = false; }
+  }
+
   function handlePaste(e) {
     if (!term || disposed) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     const text = e.clipboardData?.getData("text/plain");
-    if (text) term.paste(text);
+    pasteText(text);
   }
 
   function sendBinary(type, payload) {
@@ -555,8 +632,66 @@
     rafs.flush = requestAnimationFrame(flushOutput);
   }
 
-  function writeOutput(data) {
+  $effect(() => {
+    const mode = localEchoMode; // read first so the effect tracks it before the predictor exists
+    if (!echoPredictor) return;
+    echoPredictor.mode = mode;
+    resetEcho();
+  });
+
+  function resetEcho() {
+    echoPredictor?.reset();
+    scheduleEchoRender();
+  }
+
+  /** After the predictions changed: redraw the overlay, and arm a timer so the
+   * oldest guess is dropped if its echo never comes. */
+  function refreshEchoOverlay() {
+    scheduleEchoRender();
+    const expiry = echoPredictor?.nextExpiry();
+    if (expiry == null) { clearTimer("echoTimeout"); return; }
+    setTimer("echoTimeout", () => {
+      if (echoPredictor?.validate()) refreshEchoOverlay();
+    }, Math.max(0, expiry - performance.now()) + 5);
+  }
+
+  /** In a frame callback, so the overlay changes in the same paint as Ghostty's
+   * canvas (also drawn per frame): a confirmed guess never flickers. */
+  function scheduleEchoRender() {
+    if (rafs.echo !== null || disposed) return;
+    rafs.echo = requestAnimationFrame(() => {
+      rafs.echo = null;
+      renderEcho();
+    });
+  }
+
+  function renderEcho() {
+    const layout = echoPredictor?.layout();
+    const canvas = canvasEl();
+    const metrics = term?.renderer?.getMetrics();
+    if (!layout || !canvas || !metrics) { echoView = null; return; }
+    const canvasRect = canvas.getBoundingClientRect(), hostRect = termHost.getBoundingClientRect();
+    /** Top-left of a cell, relative to the host the overlay is positioned in. */
+    const cellOrigin = (col, row) => ({
+      left: canvasRect.left - hostRect.left + col * metrics.width,
+      top: canvasRect.top - hostRect.top + row * metrics.height,
+    });
+    echoView = {
+      height: metrics.height,
+      font: `${term.options.fontSize}px ${term.options.fontFamily}`,
+      cells: layout.cells.map((cell) => ({
+        ...cell, ...cellOrigin(cell.col, cell.row), cellWidth: cell.width * metrics.width,
+        color: cell.fg ?? "var(--text-primary)",
+      })),
+      cursor: cellOrigin(layout.cursor.col, layout.cursor.row),
+    };
+  }
+
+  /** @param {number} receivedAt when the data arrived, so echo timing doesn't
+   * include the frame it waited for in the output queue */
+  function writeOutput(data, receivedAt = performance.now()) {
     term?.write(data);
+    if (echoPredictor?.validate(receivedAt)) refreshEchoOverlay();
     if (!findOpen) return;
     findMatches = [];
     findResultIndex = -1;
@@ -567,16 +702,16 @@
   function flushOutput() {
     rafs.flush = null;
     if (disposed) return;
-    const chunks = pendingOutput, total = pendingOutputBytes;
+    const chunks = pendingOutput, total = pendingOutputBytes, receivedAt = pendingSince;
     if (!chunks.length || !term) return;
     pendingOutput = []; pendingOutputBytes = 0;
     // Merging avoids per-chunk write overhead, but a huge backlog is cheaper written straight through.
-    if (chunks.length === 1) { writeOutput(chunks[0]); return; }
-    if (total > MAX_MERGED_OUTPUT_BYTES) { for (const c of chunks) writeOutput(c); return; }
+    if (chunks.length === 1) { writeOutput(chunks[0], receivedAt); return; }
+    if (total > MAX_MERGED_OUTPUT_BYTES) { for (const c of chunks) writeOutput(c, receivedAt); return; }
     const merged = new Uint8Array(total);
     let off = 0;
     for (const c of chunks) { merged.set(c, off); off += c.length; }
-    writeOutput(merged);
+    writeOutput(merged, receivedAt);
   }
 
   function connect() {
@@ -591,6 +726,7 @@
       reconnectDelay = RECONNECT_DELAY_MS;
       lastSentCols = 0; lastSentRows = 0;
       lastMotion = "";
+      resetEcho();
       if (hadSession) writeOutput(`${MODE_RESET}\r\n\x1b[2m[reconnected: new shell]\x1b[0m\r\n`);
       hadSession = true;
       if (doFit()) sendResize(term.cols, term.rows);
@@ -606,6 +742,7 @@
           writeOutput(output);
           return;
         }
+        if (!pendingOutput.length) pendingSince = performance.now();
         pendingOutput.push(output);
         pendingOutputBytes += output.length;
         if (pendingOutputBytes >= MAX_PENDING_OUTPUT_BYTES) {
@@ -712,17 +849,19 @@
     const key = e.key.toLowerCase();
     if (key === "v" && clipboard.read && navigator.clipboard?.readText) {
       e.preventDefault();
-      navigator.clipboard.readText().then(t => t && term?.paste(t)).catch(() => {});
+      pasteFromClipboard();
       return true;
     }
     if (key === "c" && clipboard.write && navigator.clipboard?.writeText) {
       e.preventDefault();
-      void copyText(blockSelection
-        ? blockSelectionRange(blockSelection.start, blockSelection.end)
-        : term.getSelection());
+      void copyText(selectedText());
       return true;
     }
     return false;
+  }
+
+  function selectedText() {
+    return blockSelection ? blockSelectionRange(blockSelection.start, blockSelection.end) : term?.getSelection() ?? "";
   }
 
   /** Track clipboard permissions so Ctrl+Shift+C/V only intercept keys we can service. */
@@ -762,7 +901,15 @@
       resizeObserver.observe(container);
       cleanups.push(() => resizeObserver.disconnect());
 
-      term.onData((d) => sendBinary(MSG_INPUT, d));
+      echoPredictor = createLocalEcho(term);
+      echoPredictor.mode = localEchoMode;
+      term.onData((d) => {
+        sendBinary(MSG_INPUT, d);
+        if (!echoPredictor || echoPredictor.mode === "off") return;
+        if (pasting) echoPredictor.onPaste();
+        else echoPredictor.onInput(d);
+        refreshEchoOverlay();
+      });
       term.attachCustomWheelEventHandler(reportWheelEvent);
       term.attachCustomKeyEventHandler(handleTerminalKey);
 
@@ -773,7 +920,7 @@
       on(termHost, "mousedown", reportMouseDown, capture);
       on(termHost, "mousemove", reportMouseMove, capture);
       on(termHost, "click", reportClick, capture);
-      on(termHost, "contextmenu", reportContextMenu, capture);
+      on(termHost.parentElement ?? termHost, "contextmenu", reportContextMenu, capture);
       on(document, "mouseup", reportMouseUp, capture);
 
       probeClipboardPermissions();
@@ -797,8 +944,43 @@
   });
 </script>
 
+<!-- Capture phase: other panes' menus stop their right-clicks from bubbling. -->
+<svelte:document onmousedowncapture={closeMenuOutside} oncontextmenucapture={closeMenuOutside} onkeydowncapture={closeMenuOnKey}
+  onwheelcapture={() => (menu = null)} />
+<svelte:window onblur={() => (menu = null)} onresize={() => (menu = null)} />
+
 <div class="term-host" bind:this={termHost}>
   <div class="term-tab-wrap" bind:this={container}></div>
+  {#if echoView}
+    <div class="term-echo" style:font={echoView.font} aria-hidden="true">
+      {#each echoView.cells as cell, i (i)}
+        <span class:guess={cell.guess} style:left="{cell.left}px" style:top="{cell.top}px" style:width="{cell.cellWidth}px"
+          style:height="{echoView.height}px" style:line-height="{echoView.height}px" style:--echo-fg={cell.color}
+          style:font-weight={cell.bold ? "bold" : null}>{cell.ch}</span>
+      {/each}
+      <span class="term-echo-cursor" style:left="{echoView.cursor.left}px" style:top="{echoView.cursor.top}px"
+        style:height="{echoView.height}px"></span>
+    </div>
+  {/if}
+  {#if menu}
+    <!-- Ghostty clears its selection on any document click outside the canvas,
+         which would undo Select All, so menu clicks stop here. -->
+    <div class="ctx-menu" bind:this={menuEl} style:left="{menuPos.x}px" style:top="{menuPos.y}px" role="menu" tabindex="-1"
+      onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
+      <button class="ctx-menu-item" class:ctx-menu-disabled={!menu.selection} role="menuitem"
+        onclick={() => menu.selection && runMenuAction((m) => copyText(m.selection))}>Copy</button>
+      <!-- The async clipboard API exists only in secure contexts (HTTPS or localhost). -->
+      <button class="ctx-menu-item" class:ctx-menu-disabled={!navigator.clipboard?.readText} role="menuitem"
+        onclick={() => navigator.clipboard?.readText && runMenuAction(pasteFromClipboard)}>Paste</button>
+      <div class="ctx-menu-sep"></div>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => runMenuAction(() => term.selectAll())}>Select All</button>
+      <button class="ctx-menu-item" role="menuitem" onclick={() => runMenuAction(openFind, false)}>Find</button>
+      <div class="ctx-menu-sep"></div>
+      <!-- Full-screen programs own the screen; clearing under them garbles it. -->
+      <button class="ctx-menu-item" class:ctx-menu-disabled={menu.fullScreen} role="menuitem"
+        onclick={() => !menu.fullScreen && runMenuAction(clearTerminal)}>Clear</button>
+    </div>
+  {/if}
   {#if blockSelection}
     <div class="term-block-selection" style={blockSelectionStyle()}></div>
   {/if}

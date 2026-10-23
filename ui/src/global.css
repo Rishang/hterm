@@ -452,6 +452,8 @@ html, body {
   padding: 24px;
   background: rgba(0, 0, 0, 0.56);
 }
+/* Focused on open only to take keys from the terminal; no ring around the whole window. */
+.settings-window:focus { outline: none; }
 .settings-window {
   width: min(760px, 100%); height: min(560px, 100%);
   display: flex; flex-direction: column;
@@ -1021,22 +1023,48 @@ html, body {
   padding: 0 4px; font-size: 12px; height: 18px;
 }
 
-.fm-ctx {
+/* Context menus (file explorer, terminal) */
+.ctx-menu {
   position: fixed; z-index: 200;
   background: var(--bg-surface); border: 1px solid var(--border-strong);
   box-shadow: 0 4px 16px var(--shadow-strong);
   min-width: 160px; width: max-content; padding: 4px 0;
 }
-.fm-ctx-item {
+.ctx-menu-item {
   display: flex; align-items: center;
-  width: 100%; padding: 3px 12px; font-size: 12px; color: var(--text-primary);
+  width: 100%; padding: 3px 12px; font-size: 13px; color: var(--text-primary);
   cursor: pointer; user-select: none; text-align: left;
   background: none; border: none; font-family: inherit;
 }
-.fm-ctx-item:hover { background: var(--bg-context-hover); color: var(--text-inverse); }
-.fm-ctx-danger { color: var(--status-disconnected); }
-.fm-ctx-danger:hover { background: var(--bg-danger-muted); color: var(--status-disconnected); }
-.fm-ctx-sep { height: 1px; background: var(--border-strong); margin: 4px 0; }
+.ctx-menu-item:hover { background: var(--bg-context-hover); color: var(--text-inverse); }
+.ctx-menu-danger { color: var(--status-disconnected); }
+.ctx-menu-danger:hover { background: var(--bg-danger-muted); color: var(--status-disconnected); }
+.ctx-menu-sep { height: 1px; background: var(--border-strong); margin: 4px 0; }
+
+/* Terminal local echo overlay (TermTab) */
+.term-echo {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+/* Opaque cell background hides whatever the canvas has there (the real
+   cursor, an autosuggestion, a tail being shifted); guesses are dimmed to
+   mark them unconfirmed, shifted real text is not. */
+.term-echo span {
+  position: absolute;
+  white-space: pre;
+  text-align: center;
+  background: var(--bg-primary);
+  color: var(--echo-fg);
+}
+.term-echo span.guess {
+  color: color-mix(in srgb, var(--echo-fg) 70%, var(--bg-primary));
+}
+.term-echo .term-echo-cursor {
+  width: 2px;
+  background: var(--accent-cursor);
+}
 
 .fm-modal-backdrop {
   position: fixed; inset: 0; z-index: 300;
@@ -1080,8 +1108,8 @@ html, body {
   font-size: 11px; color: var(--text-subtle); font-style: italic;
   height: 22px; display: flex; align-items: center;
 }
-.fm-ctx-disabled { color: var(--text-subtle) !important; cursor: default; }
-.fm-ctx-disabled:hover { background: var(--transparent) !important; color: var(--text-subtle) !important; }
+.ctx-menu-disabled { color: var(--text-subtle) !important; cursor: default; }
+.ctx-menu-disabled:hover { background: var(--transparent) !important; color: var(--text-subtle) !important; }
 
 @media (max-width: 760px) {
   .gs-bar { grid-template-columns: minmax(0, 1fr); }

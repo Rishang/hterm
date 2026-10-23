@@ -36,6 +36,8 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 - Full Ghostty Web terminal integration
 - Custom themes & fonts
 - Real-time resize handling
+- Optional local echo for slow links (Settings → Terminal): typing shows immediately, dimmed until the server confirms it
+- Right-click menu: Copy, Paste, Select All, Find, Clear
 
 ### 🗂️ **Workspace & Editor**
 - File explorer that follows the active terminal directory
