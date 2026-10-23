@@ -21,7 +21,7 @@
   /** @type {{ active: boolean, searchActive?: boolean, layoutKey?: string, localEcho?: import("./localEcho.js").LocalEchoMode, oncwd?: (cwd: string) => void }} */
   let { active, searchActive = active, layoutKey = "", localEcho: localEchoMode = "off", oncwd } = $props();
 
-  const MSG_INPUT = 0, MSG_OUTPUT = 1, MSG_RESIZE = 2, MSG_ERROR = 3, MSG_CWD = 4;
+  const MSG_INPUT = 0, MSG_OUTPUT = 1, MSG_RESIZE = 2, MSG_ERROR = 3, MSG_CWD = 4, MSG_ECHO_ACK = 5;
   const RECONNECT_DELAY_MS = 1000;
   const MAX_RECONNECT_DELAY_MS = 15000;
   const PTY_RESIZE_INTERVAL_MS = 80;
@@ -297,10 +297,10 @@
   function sendMouseEvent(button, cell, release = false) {
     if (!term) return;
     if (mode(1006)) {
-      sendBinary(MSG_INPUT, `\x1b[<${button};${cell.col};${cell.row}${release ? "m" : "M"}`);
+      sendInput(`\x1b[<${button};${cell.col};${cell.row}${release ? "m" : "M"}`);
       return;
     }
-    sendBinary(MSG_INPUT, new Uint8Array([
+    sendInput(new Uint8Array([
       0x1b, 0x5b, 0x4d,
       Math.min(button + 32, 255),
       Math.min(cell.col + 32, 255),
@@ -552,7 +552,7 @@
    * readline REPLs), and the scrollback is dropped here. */
   function clearTerminal() {
     term.write("\x1b[3J");
-    sendBinary(MSG_INPUT, "\x0c");
+    sendInput("\x0c");
     resetEcho();
   }
 
@@ -574,7 +574,7 @@
   /** Focus moving within the pane is not a terminal focus change. */
   function reportFocusChange(e, sequence) {
     if (e.relatedTarget && container?.contains(e.relatedTarget)) return;
-    if (!disposed && term?.hasFocusEvents()) sendBinary(MSG_INPUT, sequence);
+    if (!disposed && term?.hasFocusEvents()) sendInput(sequence);
   }
 
   /** Paste through Ghostty (bracketed when the program asked for it). Its
@@ -594,17 +594,25 @@
     pasteText(text);
   }
 
+  /** @returns whether the frame was sent */
   function sendBinary(type, payload) {
-    if (ws?.readyState !== WebSocket.OPEN) return;
+    if (ws?.readyState !== WebSocket.OPEN) return false;
     const body = typeof payload === "string" ? encoder.encode(payload) : payload;
     if (!body) {
       ws.send(new Uint8Array([type]));
-      return;
+      return true;
     }
     const msg = new Uint8Array(1 + body.length);
     msg[0] = type;
     msg.set(body, 1);
     ws.send(msg);
+    return true;
+  }
+
+  /** Input that isn't typed keys. Local echo counts every input frame, since
+   * the server's echo acks number them. */
+  function sendInput(data) {
+    if (sendBinary(MSG_INPUT, data)) echoPredictor?.onOtherInput();
   }
 
   let lastSentCols = 0, lastSentRows = 0;
@@ -638,6 +646,12 @@
     echoPredictor.mode = mode;
     resetEcho();
   });
+
+  function startEcho() {
+    echoPredictor = createLocalEcho(term);
+    echoPredictor.mode = localEchoMode;
+    scheduleEchoRender();
+  }
 
   function resetEcho() {
     echoPredictor?.reset();
@@ -687,10 +701,14 @@
     };
   }
 
+  /** Ghostty answers queries in the output (cursor position, device
+   * attributes) through onData, synchronously inside write(). */
+  let writingOutput = false;
   /** @param {number} receivedAt when the data arrived, so echo timing doesn't
    * include the frame it waited for in the output queue */
   function writeOutput(data, receivedAt = performance.now()) {
-    term?.write(data);
+    writingOutput = true;
+    try { term?.write(data); } finally { writingOutput = false; }
     if (echoPredictor?.validate(receivedAt)) refreshEchoOverlay();
     if (!findOpen) return;
     findMatches = [];
@@ -726,7 +744,8 @@
       reconnectDelay = RECONNECT_DELAY_MS;
       lastSentCols = 0; lastSentRows = 0;
       lastMotion = "";
-      resetEcho();
+      // The server numbers input frames per connection.
+      startEcho();
       if (hadSession) writeOutput(`${MODE_RESET}\r\n\x1b[2m[reconnected: new shell]\x1b[0m\r\n`);
       hadSession = true;
       if (doFit()) sendResize(term.cols, term.rows);
@@ -751,6 +770,11 @@
         } else scheduleFlush();
       } else if (data[0] === MSG_ERROR) {
         writeOutput(`\r\n\x1b[31m[Error: ${decoder.decode(data.subarray(1))}]\x1b[0m\r\n`);
+      } else if (data[0] === MSG_ECHO_ACK && data.length >= 6) {
+        // Acknowledges input whose output came first: write any still queued.
+        if (pendingOutput.length) { cancelRaf("flush"); flushOutput(); }
+        const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+        if (echoPredictor?.onAck(view.getUint32(1), data[5] === 1)) refreshEchoOverlay();
       } else if (data[0] === MSG_CWD) {
         // The server only sends this when the shell's directory actually changed.
         oncwd?.(decoder.decode(data.subarray(1)));
@@ -901,14 +925,13 @@
       resizeObserver.observe(container);
       cleanups.push(() => resizeObserver.disconnect());
 
-      echoPredictor = createLocalEcho(term);
-      echoPredictor.mode = localEchoMode;
+      startEcho();
       term.onData((d) => {
-        sendBinary(MSG_INPUT, d);
-        if (!echoPredictor || echoPredictor.mode === "off") return;
-        if (pasting) echoPredictor.onPaste();
+        if (!sendBinary(MSG_INPUT, d) || !echoPredictor) return;
+        if (writingOutput) echoPredictor.onReply();
+        else if (pasting) echoPredictor.onOtherInput(d);
         else echoPredictor.onInput(d);
-        refreshEchoOverlay();
+        if (echoPredictor.mode !== "off") refreshEchoOverlay();
       });
       term.attachCustomWheelEventHandler(reportWheelEvent);
       term.attachCustomKeyEventHandler(handleTerminalKey);

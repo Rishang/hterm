@@ -229,6 +229,18 @@ impl PtySession {
         path.to_str().map(str::to_owned)
     }
 
+    /// Whether the program reading the terminal hides what is typed: a line
+    /// read with echo off, as password prompts do (sudo, ssh, getpass,
+    /// `read -s`). Line editors and full-screen programs turn off canonical
+    /// mode as well, so they don't count. On Linux the master reports the
+    /// slave's termios.
+    pub fn hides_input(&self) -> bool {
+        use nix::sys::termios::{tcgetattr, LocalFlags};
+        tcgetattr(self.master.get_ref())
+            .map(|t| t.local_flags.contains(LocalFlags::ICANON) && !t.local_flags.contains(LocalFlags::ECHO))
+            .unwrap_or(false)
+    }
+
     /// Resize the PTY window (columns × rows).
     ///
     /// The kernel sends `SIGWINCH` to the shell's foreground process group

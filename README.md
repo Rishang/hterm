@@ -299,8 +299,11 @@ docker run -p 8080:8080 \
 
 WebSocket binary frames begin with a type byte: `0x00` input (client → server),
 `0x01` PTY output (server → client), `0x02` resize (client → server; big-endian
-u16 columns and rows), and `0x04` shell working directory (server → client;
-UTF-8 absolute path). Treat `0x04` as a control frame, not terminal output.
+u16 columns and rows), `0x04` shell working directory (server → client;
+UTF-8 absolute path), and `0x05` echo acknowledgement (server → client;
+big-endian u32 count of input frames the shell has had 50 ms to answer, then
+one byte, `1` while the program reading the terminal hides input). Treat `0x04`
+and `0x05` as control frames, not terminal output.
 
 #### **MCP Protocol** (`/mcp/*`)
 | Method | Endpoint | Description |

@@ -33,7 +33,7 @@ info:
     All routes can be prefixed with a custom base path using the `--base-path` flag.
     Example: `--base-path /terminal` results in routes like `/terminal/api/config`
 
-  version: 0.4.0
+  version: 0.4.1
   contact:
     name: GitHub Repository
     url: https://github.com/Rishang/hterm
@@ -319,6 +319,11 @@ paths:
         - `0x04`: Current working directory (server → client, UTF-8 absolute path).
           Sent when available after the session starts and after output flushes only
           when the shell directory changes; clients must treat it as a control frame.
+        - `0x05`: Echo acknowledgement (server → client, input frame count u32 BE,
+          then a u8 that is `1` while the program reading the terminal hides input,
+          as password prompts do). Sent 50 ms after input reaches the shell, behind
+          any output produced in that time, and when the hidden state changes. Local
+          echo uses it to know the screen shows the effect of earlier keys.
 
         **Query Parameters** (if `url_arg` and `writable` are enabled):
         - `arg`: Repeated parameter for shell arguments (e.g., `?arg=-c&arg=ls`)
