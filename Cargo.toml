@@ -1,6 +1,6 @@
 [package]
 name        = "hterm"
-version     = "0.4.0"
+version     = "0.4.1"
 edition     = "2021"
 description = "Share your terminal over the web"
 

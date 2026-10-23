@@ -18,6 +18,7 @@ const MSG_OUTPUT: u8 = 1; // server → client: PTY output
 const MSG_RESIZE: u8 = 2; // client → server: terminal resize (cols u16 BE, rows u16 BE)
                           // 3 is reserved for the error frame the browser renders inline.
 const MSG_CWD: u8 = 4; // server → client: shell working directory (UTF-8 path)
+const MSG_ECHO_ACK: u8 = 5; // server → client: input frames answered (u32 BE), input hidden (u8)
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,12 @@ const MAX_COALESCE_SIZE: usize = 16 * 1024;
 /// backpressures the PTY (and the shell) instead of queueing seconds of output
 /// ahead of keystroke echoes: worst case 4 × 16 KiB = 64 KiB per session.
 const WS_OUT_CAP: usize = 4;
+
+/// How long the shell gets to answer a keystroke before the browser is told
+/// it was answered (mosh uses the same 50 ms). Output it produced in that time
+/// is sent ahead of the acknowledgement, so the browser's local echo knows the
+/// screen is up to date.
+const ECHO_WAIT: Duration = Duration::from_millis(50);
 
 /// Inbound command channel depth. Keep this large enough that short paste/input
 /// bursts do not block the WebSocket reader while PTY output is busy.
@@ -76,6 +83,52 @@ pub struct AppState {
     /// Persistent language-server sessions used by the file editor. The lock is
     /// only held for synchronous pool bookkeeping, never across process I/O.
     pub lsp: std::sync::Mutex<crate::lsp::LspManager>,
+}
+
+/// What the browser's local echo is told about input (`MSG_ECHO_ACK`): how
+/// many input frames the shell has had `ECHO_WAIT` to answer, and whether the
+/// program reading the terminal hides input (a password prompt).
+#[derive(Default)]
+struct EchoAck {
+    /// Input frames written to the PTY.
+    received: u32,
+    received_at: Option<time::Instant>,
+    /// The next acknowledgement: when it is due, and the frame count it covers.
+    due: Option<(time::Instant, u32)>,
+    acked: u32,
+    hidden: bool,
+}
+
+impl EchoAck {
+    fn on_input(&mut self) {
+        let now = time::Instant::now();
+        self.received = self.received.wrapping_add(1);
+        self.received_at = Some(now);
+        self.due.get_or_insert((now + ECHO_WAIT, self.received));
+    }
+
+    fn due_at(&self) -> Option<time::Instant> {
+        self.due.map(|(at, _)| at)
+    }
+
+    /// Acknowledge the input that is due, and schedule the input received since.
+    fn ack_due(&mut self) {
+        if let Some((_, seq)) = self.due.take() {
+            self.acked = seq;
+        }
+        if let (true, Some(at)) = (self.received != self.acked, self.received_at) {
+            self.due = Some((at + ECHO_WAIT, self.received));
+        }
+    }
+
+    fn frame(&mut self, hidden: bool) -> Message {
+        self.hidden = hidden;
+        let mut frame = BytesMut::with_capacity(6);
+        frame.extend_from_slice(&[MSG_ECHO_ACK]);
+        frame.extend_from_slice(&self.acked.to_be_bytes());
+        frame.extend_from_slice(&[hidden as u8]);
+        Message::Binary(frame.freeze())
+    }
 }
 
 /// Commands forwarded from the WebSocket reader task to the PTY owner task.
@@ -327,6 +380,7 @@ async fn pty_main_loop(
     // front so a client that enables auto-cd before running anything still knows
     // where the shell started, then only when the path actually changes.
     let mut last_cwd = String::new();
+    let mut echo = EchoAck::default();
     if let Some(msg) = cwd_frame(&session, &mut last_cwd) {
         if out_tx.send(msg).await.is_err() {
             return;
@@ -339,7 +393,7 @@ async fn pty_main_loop(
 
             // ── Client → PTY (keystrokes / resize) ───────────────────────────
             cmd = cmd_rx.recv() => {
-                if apply_cmd(cmd, &session).await { break; }
+                if apply_cmd(cmd, &session, &mut echo).await { break; }
             },
 
             // ── PTY → client (hot path) ───────────────────────────────────────
@@ -359,11 +413,11 @@ async fn pty_main_loop(
                             tokio::select! {
                                 biased;
                                 cmd = cmd_rx.recv() => {
-                                    if apply_cmd(cmd, &session).await { break 'outer; }
+                                    if apply_cmd(cmd, &session, &mut echo).await { break 'outer; }
                                 },
                                 res = session.read(&mut buf) => match res {
                                     Ok(0) | Err(_) => {
-                                        flush_coalesce(&mut coalesce, &out_tx, &mut cmd_rx, &session).await;
+                                        flush_coalesce(&mut coalesce, &out_tx, &mut cmd_rx, &session, &mut echo).await;
                                         break 'outer;
                                     }
                                     Ok(n) => {
@@ -378,7 +432,15 @@ async fn pty_main_loop(
                         }
                     }
 
-                    if flush_coalesce(&mut coalesce, &out_tx, &mut cmd_rx, &session).await { break; }
+                    if flush_coalesce(&mut coalesce, &out_tx, &mut cmd_rx, &session, &mut echo).await { break; }
+
+                    // A password prompt turns echo off as it is printed: tell
+                    // local echo right behind the prompt, not at the next key.
+                    let hidden = session.hides_input();
+                    if hidden != echo.hidden {
+                        let msg = echo.frame(hidden);
+                        if out_tx.send(msg).await.is_err() { break; }
+                    }
 
                     // A finished output burst is the cheapest signal that a
                     // command completed and the prompt was redrawn — the moment
@@ -387,6 +449,13 @@ async fn pty_main_loop(
                         if out_tx.send(msg).await.is_err() { break; }
                     }
                 }
+            },
+
+            // ── Echo acknowledgement: after any output read above (biased) ──
+            _ = time::sleep_until(echo.due_at().unwrap_or_else(time::Instant::now)), if echo.due_at().is_some() => {
+                echo.ack_due();
+                let msg = echo.frame(session.hides_input());
+                if out_tx.send(msg).await.is_err() { break; }
             },
 
             // ── Keepalive ping (merged here — avoids a 4th task + ~64 KiB stack)
@@ -420,6 +489,7 @@ async fn flush_coalesce(
     tx: &mpsc::Sender<Message>,
     cmd_rx: &mut mpsc::Receiver<PtyCmd>,
     session: &PtySession,
+    echo: &mut EchoAck,
 ) -> bool {
     if coalesce.len() <= 1 {
         return false;
@@ -428,7 +498,7 @@ async fn flush_coalesce(
         tokio::select! {
             biased;
             cmd = cmd_rx.recv() => {
-                if apply_cmd(cmd, session).await { return true; }
+                if apply_cmd(cmd, session, echo).await { return true; }
             },
             permit = tx.reserve() => match permit {
                 Ok(p)  => break p,
@@ -463,7 +533,7 @@ fn cwd_frame(session: &PtySession, last: &mut String) -> Option<Message> {
 }
 
 /// Apply a `PtyCmd`. Returns `true` if the loop should exit.
-async fn apply_cmd(cmd: Option<PtyCmd>, session: &PtySession) -> bool {
+async fn apply_cmd(cmd: Option<PtyCmd>, session: &PtySession, echo: &mut EchoAck) -> bool {
     match cmd {
         None => true, // cmd_rx closed → ws_reader exited
         Some(PtyCmd::Input(data)) => {
@@ -471,6 +541,7 @@ async fn apply_cmd(cmd: Option<PtyCmd>, session: &PtySession) -> bool {
                 tracing::error!("PTY write error: {}", e);
                 return true;
             }
+            echo.on_input();
             false
         }
         Some(PtyCmd::Resize(cols, rows)) => {
@@ -559,6 +630,25 @@ fn hex_val(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn echo_ack_covers_input_the_shell_had_time_to_answer() {
+        let mut echo = EchoAck::default();
+        assert!(echo.due_at().is_none(), "nothing to acknowledge before input");
+        echo.on_input();
+        let first_due = echo.due_at().unwrap();
+        echo.on_input();
+        echo.on_input();
+        assert_eq!(echo.due_at(), Some(first_due), "later input doesn't delay the first acknowledgement");
+        echo.ack_due();
+        assert_eq!(echo.acked, 1);
+        assert!(echo.due_at().is_some(), "input received since is scheduled next");
+        echo.ack_due();
+        assert_eq!(echo.acked, 3);
+        assert!(echo.due_at().is_none());
+        let Message::Binary(frame) = echo.frame(true) else { panic!("binary frame") };
+        assert_eq!(&frame[..], &[MSG_ECHO_ACK, 0, 0, 0, 3, 1]);
+    }
 
     #[test]
     fn origin_allowed_rejects_cross_site_upgrades() {
