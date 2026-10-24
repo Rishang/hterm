@@ -178,6 +178,14 @@ pub fn check_auth(state: &AppState, headers: &HeaderMap) -> bool {
     }
 }
 
+/// The proxy-auth user (`auth_header`'s value), when proxy auth is in use.
+pub fn proxy_user(cfg: &AppConfig, headers: &HeaderMap) -> Option<String> {
+    if cfg.auth_header.is_empty() {
+        return None;
+    }
+    headers.get(cfg.auth_header.as_str()).and_then(|v| v.to_str().ok()).map(|v| v.trim().to_owned())
+}
+
 /// Proxy-auth check: the `auth_header` must carry a non-blank user. An empty
 /// value is what a misconfigured proxy forwards for an anonymous request, so
 /// it never counts as authenticated.

@@ -241,6 +241,18 @@ impl PtySession {
             .unwrap_or(false)
     }
 
+    /// Make a full-screen program redraw itself: shrink the window by a row
+    /// and restore it, which sends it `SIGWINCH` twice.
+    pub fn nudge_redraw(&self) {
+        let fd = self.master.as_raw_fd();
+        let mut ws = Winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
+        if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } < 0 || ws.ws_row < 2 {
+            return;
+        }
+        let _ = self.resize(ws.ws_row - 1, ws.ws_col);
+        let _ = self.resize(ws.ws_row, ws.ws_col);
+    }
+
     /// Resize the PTY window (columns × rows).
     ///
     /// The kernel sends `SIGWINCH` to the shell's foreground process group

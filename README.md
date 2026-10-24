@@ -37,6 +37,7 @@ Perfect for remote access, AI agent integration, and collaborative debugging.
 - Custom themes & fonts
 - Real-time resize handling
 - Optional local echo for slow links (Settings → Terminal): typing shows immediately, dimmed until the server confirms it
+- Shells survive dropped connections and page reloads: the browser reattaches and gets back exactly the output it missed. Closing a terminal tab ends its shell; one nobody comes back to ends after `--detach-timeout` (5 minutes)
 - Right-click menu: Copy, Paste, Select All, Find, Clear
 
 ### 🗂️ **Workspace & Editor**
@@ -302,8 +303,24 @@ WebSocket binary frames begin with a type byte: `0x00` input (client → server)
 u16 columns and rows), `0x04` shell working directory (server → client;
 UTF-8 absolute path), and `0x05` echo acknowledgement (server → client;
 big-endian u32 count of input frames the shell has had 50 ms to answer, then
-one byte, `1` while the program reading the terminal hides input). Treat `0x04`
-and `0x05` as control frames, not terminal output.
+one byte, `1` while the program reading the terminal hides input), `0x06`
+session (server → client, first on every connection; flags byte with `1` =
+reattached and `2` = part of the missed output is gone, big-endian u16
+heartbeat seconds, big-endian u64 offset in the session's output where the
+replay that follows starts, big-endian u64 count of input frames the shell
+has applied so far, then the session id), `0x07` end the shell (client → server,
+when its tab is closed), and `0x08` heartbeat (server → client every heartbeat
+interval; the client sends one at most every half interval while it receives
+anything), and `0x09` replayed output (server → client; like `0x01`, but sent
+on a reattach, so the client must not answer terminal queries in it again). Treat `0x04` to `0x08` as
+control frames, not terminal output.
+
+Connect with `?resume=<session id>&offset=<bytes>` to reattach to a shell
+whose connection dropped: `offset` counts the output bytes already received
+(0 after a page reload), and the server sends what follows from its last 2 MiB
+of output. An unknown or expired id starts a new shell. The browser keeps input
+until it is acknowledged, and after a reattach resends the frames past the
+session frame's input count: a connection can die silently with keys in it.
 
 #### **MCP Protocol** (`/mcp/*`)
 | Method | Endpoint | Description |
@@ -465,9 +482,9 @@ OPTIONS:
     # Access Control
     -W, --writable                 Allow input, file writes and exec (read-only by default)
     -R, --readonly                 Force read-only mode
-    -m, --max-clients <N>          Max concurrent clients [default: 0 = unlimited]
-    -o, --once                     Accept one client and exit
-    -q, --exit-no-conn             Exit when last client disconnects
+    -m, --max-clients <N>          Max terminal sessions [default: 0 = unlimited]
+    -o, --once                     Allow one terminal session and exit when it ends
+    -q, --exit-no-conn             Exit when the last terminal session ends
     -O, --check-origin             Also refuse WebSocket upgrades without an Origin header
     -c, --credential <USER:PASS>   HTTP Basic Auth
     -A, --auth-header <HEADER>     Reverse proxy auth header name (Host guard stays on)
@@ -477,7 +494,8 @@ OPTIONS:
     # Routing
     -b, --base-path <PATH>         URL prefix for reverse proxy
     -I, --index <PATH>             Custom index.html
-    -P, --ping-interval <SECS>     WebSocket ping interval [default: 5]
+    -P, --ping-interval <SECS>     Heartbeat interval; 3 missed ones drop a dead connection [default: 5]
+        --detach-timeout <SECS>    Keep a shell this long after its connection drops [default: 300; 0 = end it]
 
     # Privilege Drop
     -u, --uid <UID>                Drop to user ID in child processes

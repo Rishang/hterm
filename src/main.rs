@@ -81,11 +81,11 @@ struct Cli {
     #[arg(short = 'm', long = "max-clients")]
     max_clients: Option<u32>,
 
-    /// Accept only one client and exit on disconnection
+    /// Allow a single terminal session and exit when it ends
     #[arg(short = 'o', long = "once")]
     once: bool,
 
-    /// Exit when the last client disconnects
+    /// Exit when the last terminal session ends
     #[arg(short = 'q', long = "exit-no-conn")]
     exit_no_conn: bool,
 
@@ -127,6 +127,11 @@ struct Cli {
     /// WebSocket ping interval in seconds
     #[arg(short = 'P', long = "ping-interval")]
     ping_interval: Option<u64>,
+
+    /// Seconds to keep a shell after its connection drops, for the browser to
+    /// reattach (0 ends it with the connection)
+    #[arg(long = "detach-timeout")]
+    detach_timeout: Option<u64>,
 
     // ── Privilege drop ────────────────────────────────────────────────────────
     /// Drop to this numeric user ID in each spawned shell child
@@ -293,6 +298,7 @@ async fn main() {
         shutdown_tx,
         expected_auth,
         custom_index,
+        term_sessions: ws::TermSessions::default(),
         mcp_transmitters: std::sync::RwLock::new(std::collections::HashMap::new()),
         watch_sessions: std::sync::RwLock::new(std::collections::HashMap::new()),
         lsp: std::sync::Mutex::new(lsp::LspManager::default()),
@@ -348,31 +354,32 @@ async fn main() {
 /// Overlays explicitly passed CLI flags onto the loaded JSON config.
 #[rustfmt::skip] // aligned table: one flag per row
 fn apply_cli_overrides(cfg: &mut AppConfig, cli: Cli) {
-    if let Some(p) = cli.port          { cfg.port          = p; }
-    if let Some(h) = cli.host          { cfg.host          = h; }
-    if let Some(s) = cli.unix_socket   { cfg.unix_socket   = s; }
-    if let Some(s) = cli.shell         { cfg.shell         = s; }
-    if !cli.command.is_empty()         { cfg.shell         = cli.command[0].clone(); }
-    if let Some(c) = cli.cwd           { cfg.cwd           = c; }
-    if let Some(t) = cli.terminal_type { cfg.terminal_type = t; }
-    if cli.writable                    { cfg.writable      = true; }
-    if cli.readonly                    { cfg.writable      = false; }
-    if let Some(m) = cli.max_clients   { cfg.max_clients   = m; }
-    if cli.once                        { cfg.once          = true; }
-    if cli.exit_no_conn                { cfg.exit_no_conn  = true; }
-    if cli.check_origin                { cfg.check_origin  = true; }
-    if let Some(c) = cli.credential    { cfg.credential    = c; }
-    if let Some(a) = cli.auth_header   { cfg.auth_header   = a; }
-    if !cli.allowed_hosts.is_empty()   { cfg.allowed_hosts.extend(cli.allowed_hosts); }
-    if cli.url_arg                     { cfg.url_arg       = true; }
-    if let Some(b) = cli.base_path     { cfg.base_path     = b.trim_end_matches('/').to_string(); }
-    if let Some(i) = cli.index         { cfg.index_path    = i; }
-    if let Some(p) = cli.ping_interval { cfg.ping_interval = p; }
-    if let Some(u) = cli.uid           { cfg.uid           = Some(u); }
-    if let Some(g) = cli.gid           { cfg.gid           = Some(g); }
-    if cli.ssl                         { cfg.ssl           = true; }
-    if let Some(c) = cli.ssl_cert      { cfg.ssl_cert      = c; }
-    if let Some(k) = cli.ssl_key       { cfg.ssl_key       = k; }
+    if let Some(p) = cli.port           { cfg.port           = p; }
+    if let Some(h) = cli.host           { cfg.host           = h; }
+    if let Some(s) = cli.unix_socket    { cfg.unix_socket    = s; }
+    if let Some(s) = cli.shell          { cfg.shell          = s; }
+    if !cli.command.is_empty()          { cfg.shell          = cli.command[0].clone(); }
+    if let Some(c) = cli.cwd            { cfg.cwd            = c; }
+    if let Some(t) = cli.terminal_type  { cfg.terminal_type  = t; }
+    if cli.writable                     { cfg.writable       = true; }
+    if cli.readonly                     { cfg.writable       = false; }
+    if let Some(m) = cli.max_clients    { cfg.max_clients    = m; }
+    if cli.once                         { cfg.once           = true; }
+    if cli.exit_no_conn                 { cfg.exit_no_conn   = true; }
+    if cli.check_origin                 { cfg.check_origin   = true; }
+    if let Some(c) = cli.credential     { cfg.credential     = c; }
+    if let Some(a) = cli.auth_header    { cfg.auth_header    = a; }
+    if !cli.allowed_hosts.is_empty()    { cfg.allowed_hosts.extend(cli.allowed_hosts); }
+    if cli.url_arg                      { cfg.url_arg        = true; }
+    if let Some(b) = cli.base_path      { cfg.base_path      = b.trim_end_matches('/').to_string(); }
+    if let Some(i) = cli.index          { cfg.index_path     = i; }
+    if let Some(p) = cli.ping_interval  { cfg.ping_interval  = p; }
+    if let Some(d) = cli.detach_timeout { cfg.detach_timeout = d; }
+    if let Some(u) = cli.uid            { cfg.uid            = Some(u); }
+    if let Some(g) = cli.gid            { cfg.gid            = Some(g); }
+    if cli.ssl                          { cfg.ssl            = true; }
+    if let Some(c) = cli.ssl_cert       { cfg.ssl_cert       = c; }
+    if let Some(k) = cli.ssl_key        { cfg.ssl_key        = k; }
 }
 
 async fn serve_unix(app: Router, cfg: &AppConfig, shutdown_rx: tokio::sync::watch::Receiver<bool>) {
