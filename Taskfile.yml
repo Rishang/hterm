@@ -37,6 +37,16 @@ tasks:
     cmds:
       - ui/vendor/ghostty-web/build.sh
 
+  sync:skills:
+    desc: Upgrade agent-browser and sync its skill into .claude/skills/agent-browser
+    preconditions:
+      - sh: command -v agent-browser
+        msg: "agent-browser is not installed: npm i -g agent-browser && agent-browser install"
+    cmds:
+      - agent-browser upgrade
+      - mkdir -p .claude/skills/agent-browser
+      - cp "$(agent-browser skills path agent-browser)/SKILL.md" .claude/skills/agent-browser/SKILL.md
+
   dev:
     desc: Run the dev server
     cmds:
