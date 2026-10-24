@@ -39,7 +39,7 @@ The UI is component-first. `App.svelte` owns tabs, layout, persisted settings, g
 - Route families are `/api/*`, `/ws`, `/mcp/*`, and root/static assets; all are mounted under `base_path`.
 - JSON casing is endpoint-specific. Config/LSP use camelCase serde mapping; filesystem entries use `is_dir`; preserve the existing operation schema rather than imposing a global casing rule.
 - Tool calls use `{ name, arguments }`; results use `{ content: [{ type: "text", text }], isError }`; definitions use `name`, `description`, and `inputSchema`.
-- WebSocket terminal frames begin with input `0`, output `1`, resize `2`, error `3` (browser-rendered), or working directory `4` (UTF-8 path, server → client, sent only when the shell's directory changes); resize encodes big-endian `u16` columns/rows. Change browser and server together.
+- WebSocket terminal frames begin with input `0`, output `1`, resize `2`, error `3` (browser-rendered), working directory `4` (UTF-8 path, server → client, sent only when the shell's directory changes), echo ack `5`, session `6` (server → client, first frame of every connection), close `7` (client → server, ends the shell), heartbeat `8` (both ways), or replayed output `9` (server → client; like `1`, but its terminal queries must not be answered again); resize encodes big-endian `u16` columns/rows. Close code `4001` means the session was attached elsewhere. README's protocol table has the payloads. Change browser and server together.
 - For published REST/MCP/LSP behavior, update code, browser caller where applicable, and `openapi.yaml` together.
 
 ## Rust (Rust 2021, Tokio, Axum)

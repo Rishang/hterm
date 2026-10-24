@@ -58,11 +58,33 @@
   }
 
   // ── Terminal tabs ─────────────────────────────────────────────────────────
-  let termTabCounter = 1;
+  /** Each terminal tab's server-side shell, in tab order, so a page reload
+   * reattaches to the same shells. Per browser tab, like the page itself. */
+  const TERM_SESSIONS_KEY = "hterm.termSessions";
+  const restoredSessions = (() => {
+    try {
+      const ids = JSON.parse(sessionStorage.getItem(TERM_SESSIONS_KEY) ?? "[]");
+      return Array.isArray(ids) ? ids.filter((id) => typeof id === "string" && id) : [];
+    } catch { return []; }
+  })();
+  const initialTermTabs = restoredSessions.length ? restoredSessions.map((_, i) => `t${i + 1}`) : ["t1"];
+  let termTabCounter = initialTermTabs.length;
   /** @type {string[]} terminal tab ids */
-  let termTabs = $state(["t1"]);
+  let termTabs = $state([...initialTermTabs]);
   /** @type {string[]} tab bar ids in display order */
-  let tabOrder = $state(["t1"]);
+  let tabOrder = $state([...initialTermTabs]);
+  /** Terminal tab id → its shell's session id. @type {Record<string, string>} */
+  const termSessions = Object.fromEntries(restoredSessions.map((id, i) => [`t${i + 1}`, id]));
+
+  function setTermSession(tabId, sessionId) {
+    termSessions[tabId] = sessionId;
+    saveTermSessions();
+  }
+
+  function saveTermSessions() {
+    const ids = tabOrder.filter(isTermTab).map((t) => termSessions[t]).filter(Boolean);
+    try { sessionStorage.setItem(TERM_SESSIONS_KEY, JSON.stringify(ids)); } catch { /* storage unavailable */ }
+  }
 
   function newTermTab() {
     termTabCounter++;
@@ -77,6 +99,8 @@
     const next = tabAfterClose(id);
     termTabs = termTabs.filter(t => t !== id);
     tabOrder = tabOrder.filter(t => t !== id);
+    delete termSessions[id];
+    saveTermSessions();
     if (id in termCwds) {
       const remaining = { ...termCwds };
       delete remaining[id];
@@ -472,6 +496,7 @@
     const [moved] = nextOrder.splice(from, 1);
     nextOrder.splice(to, 0, moved);
     tabOrder = nextOrder;
+    saveTermSessions();
     activeTab = moved;
     dragSrcId = null;
     dragOverId = null;
@@ -711,7 +736,8 @@
         <section class="workspace-pane workspace-pane-terminal" class:hidden={isSearchTab(activeTab) || !(layoutMode === "split" || isTermTab(activeTab))} class:focused={activeTab === visibleTerminalTab()} style:flex-basis={layoutMode === "split" && splitOrientation !== "down" ? `${splitRatio * 100}%` : undefined} aria-label="Terminal pane" onpointerdown={focusTerminalPane}>
           {#each termTabs as tid (tid)}
             <div class="term-wrap" class:hidden={isSearchTab(activeTab) || !(layoutMode === "split" || isTermTab(activeTab)) || tid !== visibleTerminalTab()}>
-              <TermTab active={!isSearchTab(activeTab) && (layoutMode === "split" || isTermTab(activeTab)) && tid === visibleTerminalTab()} searchActive={activeTab === tid} layoutKey={`${layoutMode}:${splitOrientation}:${splitRatio}`} localEcho={terminal.localEcho} oncwd={(cwd) => setTermCwd(tid, cwd)} />
+              <TermTab active={!isSearchTab(activeTab) && (layoutMode === "split" || isTermTab(activeTab)) && tid === visibleTerminalTab()} searchActive={activeTab === tid} layoutKey={`${layoutMode}:${splitOrientation}:${splitRatio}`} localEcho={terminal.localEcho} oncwd={(cwd) => setTermCwd(tid, cwd)}
+                session={termSessions[tid] ?? null} onsession={(id) => setTermSession(tid, id)} />
             </div>
           {/each}
         </section>

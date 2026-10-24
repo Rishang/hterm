@@ -33,7 +33,7 @@ info:
     All routes can be prefixed with a custom base path using the `--base-path` flag.
     Example: `--base-path /terminal` results in routes like `/terminal/api/config`
 
-  version: 0.4.1
+  version: 0.5.0
   contact:
     name: GitHub Repository
     url: https://github.com/Rishang/hterm
@@ -324,15 +324,47 @@ paths:
           as password prompts do). Sent 50 ms after input reaches the shell, behind
           any output produced in that time, and when the hidden state changes. Local
           echo uses it to know the screen shows the effect of earlier keys.
+        - `0x06`: Session (server → client, first frame on every connection): flags u8
+          (`1` = an existing shell was reattached, `2` = part of the output after the
+          requested offset is gone), heartbeat seconds u16 BE, the offset in the session's
+          output where the replay that follows starts (u64 BE), the number of input
+          frames the shell has applied (u64 BE; a reattaching client resends the
+          input after it), then the session id.
+        - `0x07`: End the shell (client → server, sent when the terminal tab is closed).
+          Without it, a shell whose connection drops is kept for `detach_timeout` seconds.
+        - `0x08`: Heartbeat (server → client every `ping_interval` seconds; the client
+          sends one at most every half interval while it receives anything, since the
+          server skips its own while output fills the queue). A connection silent for
+          three intervals is dropped.
+        - `0x09`: Replayed output (server → client): output a reattaching client missed,
+          sent right after the `0x06` frame. Like `0x01`, but the terminal queries in it
+          were answered when it first ran, so the client must not answer them again.
 
-        **Query Parameters** (if `url_arg` and `writable` are enabled):
-        - `arg`: Repeated parameter for shell arguments (e.g., `?arg=-c&arg=ls`)
+        A connection whose session is attached elsewhere is closed with code 4001.
+
+        **Query Parameters**:
+        - `resume`: Session id to reattach to (from the `0x06` frame).
+        - `offset`: Output bytes of that session the client already has (0 or absent
+          after a page reload); the server sends the output that follows.
+        - `arg`: Repeated parameter for shell arguments (e.g., `?arg=-c&arg=ls`), only
+          when `url_arg` and `writable` are enabled. Ignored when reattaching.
       tags:
         - terminal
       security:
         - BasicAuth: []
         - ProxyAuth: []
       parameters:
+        - name: resume
+          in: query
+          description: Session id to reattach to
+          schema:
+            type: string
+        - name: offset
+          in: query
+          description: Output bytes of the resumed session already received
+          schema:
+            type: integer
+            minimum: 0
         - name: arg
           in: query
           description: Shell argument (requires --url-arg and --writable)

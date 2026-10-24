@@ -58,11 +58,11 @@ pub struct AppConfig {
     #[serde(default)]
     pub max_clients: u32,
 
-    /// Exit after the first client disconnects.
+    /// Allow a single terminal session, and exit when it ends.
     #[serde(default)]
     pub once: bool,
 
-    /// Exit when the last client disconnects.
+    /// Exit when the last terminal session ends.
     #[serde(default)]
     pub exit_no_conn: bool,
 
@@ -117,6 +117,11 @@ pub struct AppConfig {
     #[serde(default = "default_ping_interval")]
     pub ping_interval: u64,
 
+    /// Seconds a shell is kept after its connection drops, for the browser to
+    /// reattach (reconnect or page reload). 0 ends the shell with the connection.
+    #[serde(default = "default_detach_timeout")]
+    pub detach_timeout: u64,
+
     // ── Privilege drop ────────────────────────────────────────────────────────
     /// Drop to this numeric user ID **in each spawned shell child**.
     /// The server process itself keeps its original UID so it can accept
@@ -154,35 +159,38 @@ fn default_shell()         -> String { std::env::var("SHELL").unwrap_or_else(|_|
 fn default_terminal_type() -> String { "xterm-256color".into() }
 #[rustfmt::skip]
 fn default_ping_interval() -> u64    { 5 }
+#[rustfmt::skip]
+fn default_detach_timeout() -> u64   { 300 }
 
 #[rustfmt::skip] // aligned defaults table
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            port:          default_port(),
-            host:          default_host(),
-            unix_socket:   String::new(),
-            shell:         default_shell(),
-            cwd:           String::new(),
-            terminal_type: default_terminal_type(),
-            writable:      false,
-            max_clients:   0,
-            once:          false,
-            exit_no_conn:  false,
-            check_origin:  false,
-            credential:    String::new(),
-            auth_header:   String::new(),
-            allowed_hosts: Vec::new(),
-            base_path:     String::new(),
-            index_path:    String::new(),
-            url_arg:       false,
-            ping_interval: default_ping_interval(),
-            uid:           None,
-            gid:           None,
-            ssl:           false,
-            ssl_cert:      String::new(),
-            ssl_key:       String::new(),
-            theme:         ThemeConfig::default(),
+            port:           default_port(),
+            host:           default_host(),
+            unix_socket:    String::new(),
+            shell:          default_shell(),
+            cwd:            String::new(),
+            terminal_type:  default_terminal_type(),
+            writable:       false,
+            max_clients:    0,
+            once:           false,
+            exit_no_conn:   false,
+            check_origin:   false,
+            credential:     String::new(),
+            auth_header:    String::new(),
+            allowed_hosts:  Vec::new(),
+            base_path:      String::new(),
+            index_path:     String::new(),
+            url_arg:        false,
+            ping_interval:  default_ping_interval(),
+            detach_timeout: default_detach_timeout(),
+            uid:            None,
+            gid:            None,
+            ssl:            false,
+            ssl_cert:       String::new(),
+            ssl_key:        String::new(),
+            theme:          ThemeConfig::default(),
         }
     }
 }

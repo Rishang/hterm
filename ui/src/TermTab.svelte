@@ -12,17 +12,26 @@
 </script>
 
 <script>
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { Terminal } from "ghostty-web";
   import FindBar from "./FindBar.svelte";
   import { createLocalEcho } from "./localEcho.js";
   import { placeContextMenu } from "./contextMenu.js";
 
-  /** @type {{ active: boolean, searchActive?: boolean, layoutKey?: string, localEcho?: import("./localEcho.js").LocalEchoMode, oncwd?: (cwd: string) => void }} */
-  let { active, searchActive = active, layoutKey = "", localEcho: localEchoMode = "off", oncwd } = $props();
+  /** @type {{ active: boolean, searchActive?: boolean, layoutKey?: string, localEcho?: import("./localEcho.js").LocalEchoMode, oncwd?: (cwd: string) => void, session?: string|null, onsession?: (id: string) => void }} */
+  let { active, searchActive = active, layoutKey = "", localEcho: localEchoMode = "off", oncwd, session = null, onsession } = $props();
 
   const MSG_INPUT = 0, MSG_OUTPUT = 1, MSG_RESIZE = 2, MSG_ERROR = 3, MSG_CWD = 4, MSG_ECHO_ACK = 5;
-  const RECONNECT_DELAY_MS = 1000;
+  const MSG_SESSION = 6, MSG_CLOSE = 7, MSG_HEARTBEAT = 8, MSG_REPLAY = 9;
+  const SESSION_RESUMED = 1, SESSION_OUTPUT_LOST = 2;
+  /** Close code: the session was attached in another window. */
+  const CLOSE_TAKEN_OVER = 4001;
+  /** A socket that hears nothing (not even a heartbeat) for this many
+   * heartbeat intervals is dead, though the browser may not notice for minutes. */
+  const HEARTBEAT_MISSES = 3;
+  /** Input kept until the server acknowledges it, for a resend after a reattach. */
+  const MAX_UNCONFIRMED_INPUT_BYTES = 64 * 1024;
+  const RECONNECT_DELAY_MS = 250;
   const MAX_RECONNECT_DELAY_MS = 15000;
   const PTY_RESIZE_INTERVAL_MS = 80;
   const REFIT_RETRY_MS = 50;
@@ -60,7 +69,7 @@
   let ws = null;
   let reconnectDelay = RECONNECT_DELAY_MS;
   /** Pending `setTimeout` ids, keyed by purpose. @type {Record<string, number|null>} */
-  const timers = { reconnect: null, initialFit: null, ptyResize: null, shiftSelection: null, echoTimeout: null };
+  const timers = { reconnect: null, initialFit: null, ptyResize: null, shiftSelection: null, echoTimeout: null, watchdog: null };
   /** Pending `requestAnimationFrame` ids, keyed by purpose. @type {Record<string, number|null>} */
   const rafs = { flush: null, fit: null, echo: null };
   /** Typed-character predictions for this terminal (see localEcho.js). @type {ReturnType<typeof createLocalEcho>|null} */
@@ -74,8 +83,30 @@
   let pendingOutputBytes = 0;
   /** When the oldest queued output chunk arrived. */
   let pendingSince = 0;
-  /** Whether a socket has opened before, so the next open is a reconnect. */
-  let hadSession = false;
+  /** The server-side shell this terminal shows: reattached after a dropped
+   * connection or a page reload (App keeps it per tab). */
+  // svelte-ignore state_referenced_locally
+  let sessionId = session;
+  /** Bytes of output received from this session, so a reattach sends only what's missing. */
+  let outputReceived = 0;
+  let heartbeatMs = 5000;
+  /** When this terminal last sent a heartbeat. */
+  let lastBeatAt = 0;
+  /** The session was attached in another window: take it back on the next key. */
+  let takenOver = false;
+  /** The socket the server has attached to the session; input waits until then. */
+  let attachedSocket = null;
+  /** Input frames sent in this session, numbered as the server counts them,
+   * and the count when this connection attached. */
+  let inputSeq = 0, inputBase = 0;
+  /** Input the server hasn't acknowledged, oldest first, including keys typed
+   * while reconnecting: a connection can die silently with frames in it, so a
+   * reattach resends what the shell never got.
+   * @type {{ seq: number, data: string|Uint8Array, resend: boolean }[]} */
+  let unconfirmed = [];
+  let unconfirmedBytes = 0;
+  /** Unconfirmed input outgrew the limit, so a resend would skip some of it. */
+  let inputGap = false;
   let lastPtyResizeAt = 0;
   const clipboard = { read: false, write: false };
   let findOpen = $state(false);
@@ -609,10 +640,40 @@
     return true;
   }
 
+  /** Send input to the shell and keep it until the server acknowledges it.
+   * While reconnecting, input to `resend` waits for the shell; other input
+   * (mouse, focus, query replies) only matters now and is dropped.
+   * @returns whether it was sent now */
+  function sendKeys(data, resend = true) {
+    const live = attachedSocket === ws && ws?.readyState === WebSocket.OPEN;
+    if (!live && !resend) return false;
+    const size = typeof data === "string" ? data.length : data.byteLength;
+    if (unconfirmedBytes + size > MAX_UNCONFIRMED_INPUT_BYTES) {
+      if (!live) return false;
+      unconfirmed = []; unconfirmedBytes = 0; inputGap = true;
+    }
+    inputSeq++;
+    unconfirmed.push({ seq: inputSeq, data, resend });
+    unconfirmedBytes += size;
+    return live && sendBinary(MSG_INPUT, data);
+  }
+
+  /** The server applied the first `acked` input frames of this connection. */
+  function confirmInput(acked) {
+    const confirmed = inputBase + acked;
+    let done = 0;
+    for (; done < unconfirmed.length && unconfirmed[done].seq <= confirmed; done++) {
+      const { data } = unconfirmed[done];
+      unconfirmedBytes -= typeof data === "string" ? data.length : data.byteLength;
+    }
+    unconfirmed.splice(0, done);
+    if (confirmed >= inputSeq) inputGap = false;
+  }
+
   /** Input that isn't typed keys. Local echo counts every input frame, since
    * the server's echo acks number them. */
-  function sendInput(data) {
-    if (sendBinary(MSG_INPUT, data)) echoPredictor?.onOtherInput();
+  function sendInput(data, resend = false) {
+    if (sendKeys(data, resend)) echoPredictor?.onOtherInput();
   }
 
   let lastSentCols = 0, lastSentRows = 0;
@@ -704,6 +765,9 @@
   /** Ghostty answers queries in the output (cursor position, device
    * attributes) through onData, synchronously inside write(). */
   let writingOutput = false;
+  /** Writing output replayed on a reattach: its queries were answered when
+   * it first ran, so answering again would type the replies into the shell. */
+  let replaying = false;
   /** @param {number} receivedAt when the data arrived, so echo timing doesn't
    * include the frame it waited for in the output queue */
   function writeOutput(data, receivedAt = performance.now()) {
@@ -732,12 +796,31 @@
     writeOutput(merged, receivedAt);
   }
 
-  function connect() {
-    if (disposed || (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN))) return;
+  /** The WebSocket URL, reattaching to this terminal's shell if it has one. */
+  function sessionUrl() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const host = import.meta.env.DEV ? "127.0.0.1:7681" : location.host;
-    const socket = new WebSocket(`${proto}//${host}${basePath}/ws`);
+    const resume = sessionId ? `?resume=${encodeURIComponent(sessionId)}&offset=${outputReceived}` : "";
+    return `${proto}//${host}${basePath}/ws${resume}`;
+  }
+
+  /** End this terminal's shell now (its tab was closed) instead of keeping
+   * it for a reattach. Between connections it takes one of its own, unless
+   * another window has the shell. */
+  function closeSession() {
+    if (ws?.readyState === WebSocket.OPEN) sendBinary(MSG_CLOSE);
+    else if (sessionId && !takenOver) {
+      const socket = new WebSocket(sessionUrl());
+      socket.onopen = () => { socket.send(new Uint8Array([MSG_CLOSE])); socket.close(); };
+    }
+    if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  }
+
+  function connect() {
+    if (disposed || (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN))) return;
+    const socket = new WebSocket(sessionUrl());
     ws = socket;
+    takenOver = false;
     socket.binaryType = "arraybuffer";
     socket.onopen = () => {
       if (disposed || ws !== socket) { socket.close(); return; }
@@ -746,16 +829,25 @@
       lastMotion = "";
       // The server numbers input frames per connection.
       startEcho();
-      if (hadSession) writeOutput(`${MODE_RESET}\r\n\x1b[2m[reconnected: new shell]\x1b[0m\r\n`);
-      hadSession = true;
+      armWatchdog(socket);
       if (doFit()) sendResize(term.cols, term.rows);
     };
     socket.onmessage = (e) => {
       if (disposed || ws !== socket || typeof e.data === "string") return;
       const data = new Uint8Array(e.data);
       if (!data.length) return;
+      armWatchdog(socket);
+      // Answer whatever arrives, at most every half interval: the server skips
+      // its heartbeat while output fills the queue, but still needs to hear
+      // from a live client.
+      const now = performance.now();
+      if (now - lastBeatAt >= heartbeatMs / 2) {
+        lastBeatAt = now;
+        sendBinary(MSG_HEARTBEAT);
+      }
       if (data[0] === MSG_OUTPUT) {
         const output = data.subarray(1);
+        outputReceived += output.length;
         // Small idle writes go straight through to keep keystroke echo snappy.
         if (rafs.flush === null && pendingOutputBytes === 0 && output.length <= INTERACTIVE_OUTPUT_BYTES) {
           writeOutput(output);
@@ -768,26 +860,84 @@
           cancelRaf("flush");
           flushOutput();
         } else scheduleFlush();
+      } else if (data[0] === MSG_REPLAY) {
+        const output = data.subarray(1);
+        outputReceived += output.length;
+        if (pendingOutput.length) { cancelRaf("flush"); flushOutput(); }
+        replaying = true;
+        try { writeOutput(output); } finally { replaying = false; }
       } else if (data[0] === MSG_ERROR) {
         writeOutput(`\r\n\x1b[31m[Error: ${decoder.decode(data.subarray(1))}]\x1b[0m\r\n`);
       } else if (data[0] === MSG_ECHO_ACK && data.length >= 6) {
         // Acknowledges input whose output came first: write any still queued.
         if (pendingOutput.length) { cancelRaf("flush"); flushOutput(); }
         const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+        confirmInput(view.getUint32(1));
         if (echoPredictor?.onAck(view.getUint32(1), data[5] === 1)) refreshEchoOverlay();
       } else if (data[0] === MSG_CWD) {
         // The server only sends this when the shell's directory actually changed.
         oncwd?.(decoder.decode(data.subarray(1)));
+      } else if (data[0] === MSG_SESSION && data.length >= 20) {
+        const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+        attached(data[1], view.getUint16(2), Number(view.getBigUint64(4)), Number(view.getBigUint64(12)), decoder.decode(data.subarray(20)));
       }
     };
-    socket.onclose = () => {
+    socket.onclose = (e) => {
       if (ws !== socket) return;
       ws = null;
-      if (disposed || !active) return;
-      setTimer("reconnect", ensureConnected, reconnectDelay);
+      clearTimer("watchdog");
+      if (disposed) return;
+      if (e.code === CLOSE_TAKEN_OVER) {
+        // Reconnecting would take it back, and the other window would do the same.
+        takenOver = true;
+        // Marked as command output (OSC 133;C): on a resize ghostty clears a
+        // prompt for the shell to redraw, and no shell is attached to redraw it.
+        writeOutput("\x1b]133;C\x07\r\n\x1b[2m[opened in another window: press a key to take it back]\x1b[0m\r\n");
+        return;
+      }
+      // Background tabs reconnect too, or their shells would expire.
+      setTimer("reconnect", connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 1.5, MAX_RECONNECT_DELAY_MS);
     };
     socket.onerror = () => socket.close();
+  }
+
+  /** The server's first frame on a connection: which shell this is, whether
+   * it is the one this terminal showed, where in its output the replay that
+   * follows starts, and how many input frames it has applied. */
+  function attached(flags, heartbeatSecs, replayFrom, inputsApplied, id) {
+    const resumed = (flags & SESSION_RESUMED) !== 0;
+    heartbeatMs = Math.max(1, heartbeatSecs) * 1000;
+    if (!resumed && sessionId) {
+      // The shell ended while detached (it exited, or nobody came back in time).
+      writeOutput(`${MODE_RESET}\r\n\x1b[2m[reconnected: new shell]\x1b[0m\r\n`);
+    } else if (flags & SESSION_OUTPUT_LOST && outputReceived > 0) {
+      writeOutput("\r\n\x1b[2m[reconnected: some output was missed]\x1b[0m\r\n");
+    }
+    outputReceived = replayFrom;
+    // Resend what the shell never got. Keys typed for a shell that is gone
+    // aren't sent to the new one.
+    const resend = resumed && !inputGap ? unconfirmed.filter((e) => e.seq > inputsApplied && e.resend) : [];
+    unconfirmed = []; unconfirmedBytes = 0; inputGap = false;
+    inputSeq = inputBase = inputsApplied;
+    attachedSocket = ws;
+    for (const { data } of resend) sendInput(data, true);
+    if (id !== sessionId) {
+      sessionId = id;
+      onsession?.(id);
+    }
+  }
+
+  /** Reconnect when the socket goes quiet: through a tunnel a dead connection
+   * can stay "open" for minutes, swallowing keys. */
+  function armWatchdog(socket) {
+    setTimer("watchdog", () => {
+      if (ws !== socket) return;
+      ws = null;
+      socket.onclose = null;
+      socket.close();
+      connect();
+    }, heartbeatMs * HEARTBEAT_MISSES);
   }
 
   function initializeWhenVisible() {
@@ -797,6 +947,12 @@
     void initializeTerminal(initAbortController.signal);
   }
 
+  // A shell restored after a page reload is reattached by its tab even while
+  // hidden, so it doesn't expire before the tab is shown.
+  onMount(() => {
+    if (sessionId) initializeWhenVisible();
+  });
+
   // Re-fit and connect when activation or the persistent pane's layout changes.
   $effect(() => {
     layoutKey;
@@ -805,7 +961,6 @@
     if (term) term.options.cursorBlink = active;
     if (!active) {
       clearTimer("initialFit");
-      clearTimer("reconnect");
       return;
     }
     initializeWhenVisible();
@@ -927,7 +1082,11 @@
 
       startEcho();
       term.onData((d) => {
-        if (!sendBinary(MSG_INPUT, d) || !echoPredictor) return;
+        // The key that takes the session back isn't meant for the shell.
+        if (takenOver) { if (!writingOutput) connect(); return; }
+        if (replaying) return;
+        // A reply to a terminal query only matters to the program asking now.
+        if (!sendKeys(d, !writingOutput) || !echoPredictor) return;
         if (writingOutput) echoPredictor.onReply();
         else if (pasting) echoPredictor.onOtherInput(d);
         else echoPredictor.onInput(d);
@@ -947,6 +1106,9 @@
       on(document, "mouseup", reportMouseUp, capture);
 
       probeClipboardPermissions();
+      // A shell restored after a page reload reattaches even in a hidden tab,
+      // or it would expire before the tab is shown.
+      if (sessionId) connect();
       requestAnimationFrame(ensureConnected);
     } catch (error) {
       term?.dispose();
@@ -958,7 +1120,7 @@
   onDestroy(() => {
     disposed = true;
     initAbortController?.abort();
-    if (ws) { ws.onclose = null; ws.close(); ws = null; }
+    closeSession();
     for (const key of Object.keys(timers)) clearTimer(key);
     for (const key of Object.keys(rafs)) cancelRaf(key);
     selectingWithShift = false;

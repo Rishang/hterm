@@ -1,9 +1,11 @@
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{RawQuery, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use bytes::{Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -19,6 +21,18 @@ const MSG_RESIZE: u8 = 2; // client → server: terminal resize (cols u16 BE, ro
                           // 3 is reserved for the error frame the browser renders inline.
 const MSG_CWD: u8 = 4; // server → client: shell working directory (UTF-8 path)
 const MSG_ECHO_ACK: u8 = 5; // server → client: input frames answered (u32 BE), input hidden (u8)
+const MSG_SESSION: u8 = 6; // server → client: flags (u8), heartbeat secs (u16 BE), replay offset (u64 BE), input frames applied (u64 BE), session id
+const MSG_CLOSE: u8 = 7; // client → server: end this shell (its tab was closed)
+const MSG_HEARTBEAT: u8 = 8; // both ways: keeps proxies and tunnels from idling the socket out
+const MSG_REPLAY: u8 = 9; // server → client: output replayed on a reattach; its queries were answered already
+
+/// `MSG_SESSION` flags.
+const SESSION_RESUMED: u8 = 1; // an existing shell was reattached
+const SESSION_OUTPUT_LOST: u8 = 2; // part of the output after the client's offset is gone
+
+/// Close code for a connection whose session was attached elsewhere: the
+/// browser doesn't reconnect, or two windows would keep taking it from each other.
+const CLOSE_TAKEN_OVER: u16 = 4001;
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 
@@ -31,6 +45,14 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(1);
 
 /// Flush immediately once coalesced data reaches this size.
 const MAX_COALESCE_SIZE: usize = 16 * 1024;
+
+/// Output kept per session for a reattach: what a reconnecting browser missed,
+/// or the whole screen after a page reload.
+const OUTPUT_LOG_SIZE: usize = 2 * 1024 * 1024;
+
+/// A connection that sends nothing (not even heartbeat replies) for this many
+/// heartbeat intervals is dead: it detaches, so its shell can expire.
+const HEARTBEAT_MISSES: u32 = 3;
 
 /// Outbound message channel depth (writer task).  Kept small so a slow link
 /// backpressures the PTY (and the shell) instead of queueing seconds of output
@@ -65,6 +87,9 @@ pub struct AppState {
 
     /// Optional custom index.html loaded once at startup.
     pub custom_index: Option<&'static [u8]>,
+
+    /// Shells kept across connections, for reattaching.
+    pub term_sessions: TermSessions,
 
     /// Active MCP SSE channels.
     ///
@@ -133,10 +158,18 @@ impl EchoAck {
 
 /// Commands forwarded from the WebSocket reader task to the PTY owner task.
 enum PtyCmd {
-    /// Keystroke data — a zero-copy slice of the incoming binary frame.
-    Input(Bytes),
+    /// Keystroke data from connection `conn` — a zero-copy slice of the
+    /// incoming binary frame.
+    Input { conn: u64, data: Bytes },
     /// Terminal resize: (cols, rows).
     Resize(u16, u16),
+    /// Connection `conn` takes over the session. `offset` is how many bytes
+    /// of output a reattaching client already has; `None` for a new shell.
+    Attach { conn: u64, out: mpsc::Sender<Message>, offset: Option<u64> },
+    /// Connection `conn` closed: keep the shell for a reattach.
+    Detach(u64),
+    /// The client ended the session on purpose (closed its tab).
+    Close,
 }
 
 // ── WebSocket upgrade handler ─────────────────────────────────────────────────
@@ -176,9 +209,20 @@ pub async fn ws_handler(
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    // ── Client-limit + once-mode guard ────────────────────────────────────────
-    let Some(slot) = ClientSlot::acquire(&state) else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    // ── Reattach, or a new shell within the client limit / once mode ────────
+    // A session belongs to the proxy-auth user who started it.
+    let user = crate::tools::proxy_user(cfg, &headers);
+    let query = query.as_deref().unwrap_or("");
+    let resume = parse_resume(query).and_then(|(id, offset)| {
+        let cmds = state.term_sessions.find(&id, user.as_deref())?;
+        Some(Target::Resume { cmds, offset })
+    });
+    let target = match resume {
+        Some(target) => target,
+        None => match ClientSlot::acquire(&state) {
+            Some(slot) => Target::New(slot),
+            None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
     };
 
     // ── URL arg passthrough ───────────────────────────────────────────────────
@@ -189,11 +233,10 @@ pub async fn ws_handler(
     //   → execve("/bin/bash", ["/bin/bash", "-c", "ls -la"], env)
     // Extra argv is command execution, so read-only mode never honours it
     // (startup also clears `url_arg` without `writable`; checked here too).
-    let url_args: Vec<String> =
-        if cfg.url_arg && cfg.writable { parse_url_args(query.as_deref().unwrap_or("")) } else { vec![] };
+    let url_args: Vec<String> = if cfg.url_arg && cfg.writable { parse_url_args(query) } else { vec![] };
 
     // A failed handshake drops this callback, and with it the slot.
-    ws.on_upgrade(move |socket| handle_socket(socket, state, slot, url_args)).into_response()
+    ws.on_upgrade(move |socket| handle_socket(socket, state, target, user, url_args)).into_response()
 }
 
 /// Whether a WebSocket upgrade may proceed. A browser always sends `Origin`,
@@ -244,49 +287,83 @@ impl Drop for ClientSlot {
 
 // ── Session handler ───────────────────────────────────────────────────────────
 
+/// Shells kept across connections, so a dropped connection or a page reload
+/// reattaches to the same shell. Keyed by an unguessable session id.
+#[derive(Default)]
+pub struct TermSessions(std::sync::Mutex<HashMap<String, SessionEntry>>);
+
+struct SessionEntry {
+    cmds: mpsc::Sender<PtyCmd>,
+    /// The proxy-auth user who started it: an id seen in a proxy's access
+    /// log is no use to anyone else.
+    user: Option<String>,
+}
+
+impl TermSessions {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionEntry>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The session `id`, when it is still running and `user` started it.
+    fn find(&self, id: &str, user: Option<&str>) -> Option<mpsc::Sender<PtyCmd>> {
+        self.lock().get(id).filter(|e| e.user.as_deref() == user).map(|e| e.cmds.clone())
+    }
+}
+
+/// Source of connection ids, so a late `Detach` from a connection that was
+/// taken over can't detach its successor.
+static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
+
+/// Which shell a new connection attaches to.
+enum Target {
+    /// A new shell, holding the client slot it was admitted with.
+    New(ClientSlot),
+    /// A running shell, and how many bytes of its output the client already
+    /// has (0 after a page reload: replay everything kept).
+    Resume { cmds: mpsc::Sender<PtyCmd>, offset: u64 },
+}
+
 /// Handle one WebSocket connection.
 ///
-/// ### Task topology (3 tasks, no `Arc<PtySession>`)
+/// ### Task topology
 ///
 /// ```text
-/// ws_reader ──[PtyCmd]──► pty_main ──[Message]──► writer ──► ws_sink
-/// lightweight              owns PTY               owns sink
-///                          pings merged here
+/// ws_reader ──[PtyCmd]──► session ──[Message]──► writer ──► ws_sink
+/// per connection          owns the PTY;           per connection
+///                         outlives connections
 /// ```
 ///
-/// `pty_main` owns the `PtySession` value directly — no `Arc` overhead.
-/// Pings are merged into `pty_main` via `select!` to avoid a 4th task.
-async fn handle_socket(socket: WebSocket, state: Arc<AppState>, slot: ClientSlot, url_args: Vec<String>) {
-    let cfg = &state.config;
-    let ping_interval = Duration::from_secs(cfg.ping_interval);
-    let writable = cfg.writable;
-
-    // `slot` already counts this client; just read the total for logging.
-    let count = state.client_count.load(std::sync::atomic::Ordering::Relaxed);
-    tracing::info!(
-        shell    = %cfg.shell,
-        url_args = ?url_args,
-        clients  = count,
-        "Terminal session started"
-    );
-
-    let session = match PtySession::spawn(&cfg.shell, &url_args, &cfg.cwd, &cfg.terminal_type, cfg.uid, cfg.gid) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("PTY spawn failed: {}", e);
-            return; // dropping `slot` releases the count
-        }
+/// The session task ([`run_session`]) owns the `PtySession` and keeps running
+/// when the connection drops, so the browser can reattach. This function only
+/// bridges one connection to it.
+async fn handle_socket(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    target: Target,
+    user: Option<String>,
+    url_args: Vec<String>,
+) {
+    let writable = state.config.writable;
+    let (cmds, offset) = match target {
+        Target::Resume { cmds, offset } => (cmds, Some(offset)),
+        Target::New(slot) => match start_session(&state, slot, user, &url_args) {
+            Some(cmds) => (cmds, None),
+            None => return, // dropping the socket closes it
+        },
     };
 
     let (mut ws_sink, mut ws_stream) = socket.split();
-
-    // Outbound channel: pty_main → writer → ws_sink
     let (out_tx, mut out_rx) = mpsc::channel::<Message>(WS_OUT_CAP);
-    // Inbound command channel: ws_reader → pty_main
-    let (cmd_tx, cmd_rx) = mpsc::channel::<PtyCmd>(PTY_CMD_CAP);
+    let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
+    // The session holds the only sender from here on: when the shell ends, or
+    // another connection takes the session over, the writer sees the channel
+    // close and closes this socket.
+    if cmds.send(PtyCmd::Attach { conn, out: out_tx, offset }).await.is_err() {
+        return;
+    }
 
     // ── Writer: owns ws_sink exclusively — zero lock contention ──────────────
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         while let Some(msg) = out_rx.recv().await {
             if ws_sink.send(msg).await.is_err() {
                 break;
@@ -296,55 +373,113 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, slot: ClientSlot
         let _ = ws_sink.close().await;
     });
 
-    // ── PTY main: owns PtySession, coalesces output, handles cmds + pings ────
-    let mut pty_main = tokio::spawn(pty_main_loop(session, cmd_rx, out_tx.clone(), ping_interval));
-
     // ── WS reader: minimal work — parse frames, forward PtyCmd ───────────────
+    let reader_cmds = cmds.clone();
+    let silence_limit = Duration::from_secs(state.config.ping_interval.max(1)) * HEARTBEAT_MISSES;
     let mut ws_reader = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_stream.next().await {
-            match msg {
+        // The browser answers every heartbeat, so silence means the connection
+        // died without a close (common through tunnels).
+        while let Ok(Some(Ok(msg))) = time::timeout(silence_limit, ws_stream.next()).await {
+            let cmd = match msg {
                 Message::Binary(data) if !data.is_empty() => match data[0] {
-                    MSG_INPUT if writable && data.len() > 1 => {
-                        // `Bytes::slice` is zero-copy (refcount bump + offset adjust).
-                        if cmd_tx.send(PtyCmd::Input(data.slice(1..))).await.is_err() {
-                            break;
-                        }
-                    }
+                    // `Bytes::slice` is zero-copy (refcount bump + offset adjust).
+                    MSG_INPUT if writable && data.len() > 1 => PtyCmd::Input { conn, data: data.slice(1..) },
                     MSG_RESIZE if data.len() >= 5 => {
                         let cols = u16::from_be_bytes([data[1], data[2]]);
                         let rows = u16::from_be_bytes([data[3], data[4]]);
                         if cols > 0 && rows > 0 {
                             // Resize is idempotent; best-effort, skip if the
                             // channel is full rather than blocking the reader.
-                            let _ = cmd_tx.try_send(PtyCmd::Resize(cols, rows));
+                            let _ = reader_cmds.try_send(PtyCmd::Resize(cols, rows));
                         }
+                        continue;
                     }
-                    _ => {}
+                    MSG_CLOSE => PtyCmd::Close,
+                    _ => continue,
                 },
                 Message::Close(_) => break,
-                _ => {}
+                _ => continue,
+            };
+            if reader_cmds.send(cmd).await.is_err() {
+                break;
             }
-            // Dropping cmd_tx when this task exits signals pty_main to stop.
         }
     });
 
     // ── Wait for whichever side finishes first ────────────────────────────────
-    tokio::select! {
-        _ = &mut pty_main  => ws_reader.abort(),  // shell exited
-        _ = &mut ws_reader => pty_main.abort(),   // client disconnected
+    let client_left = tokio::select! {
+        _ = &mut writer    => { ws_reader.abort(); false } // shell ended, or taken over
+        _ = &mut ws_reader => true,                       // client disconnected
+    };
+    // A client that went silent can leave the writer stuck sending into a
+    // dead connection for minutes; stop it so the session isn't held up
+    // behind it. Then keep the shell for a reattach (a no-op when it already
+    // moved on).
+    if client_left {
+        writer.abort();
     }
+    let _ = cmds.send(PtyCmd::Detach(conn)).await;
+}
 
-    // Drop our clone of out_tx.  Once pty_main's clone also drops (task
-    // completed or aborted above), the writer sees a closed channel, drains
-    // any already-queued frames (including the shell's final output), then
-    // exits naturally.  Previously writer.abort() was used here, which
-    // discarded the last output frame on clean shell exit.
-    drop(out_tx);
-    let _ = writer.await;
+/// Spawn a shell and the session task that owns it, and register it for
+/// reattaching. Returns the session's command channel.
+fn start_session(
+    state: &Arc<AppState>,
+    slot: ClientSlot,
+    user: Option<String>,
+    url_args: &[String],
+) -> Option<mpsc::Sender<PtyCmd>> {
+    let cfg = &state.config;
+    let pty = match PtySession::spawn(&cfg.shell, url_args, &cfg.cwd, &cfg.terminal_type, cfg.uid, cfg.gid) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("PTY spawn failed: {}", e);
+            return None; // dropping `slot` releases the count
+        }
+    };
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let (cmds, cmd_rx) = mpsc::channel::<PtyCmd>(PTY_CMD_CAP);
+    state.term_sessions.lock().insert(id.clone(), SessionEntry { cmds: cmds.clone(), user });
 
+    // `slot` already counts this session; just read the total for logging.
+    let count = state.client_count.load(Ordering::Relaxed);
+    tracing::info!(shell = %cfg.shell, url_args = ?url_args, sessions = count, "Terminal session started");
+    tokio::spawn(run_session(pty, id, cmd_rx, Arc::clone(state), slot));
+    Some(cmds)
+}
+
+/// The life of one shell, across connections: it ends when the shell exits,
+/// the client closes it on purpose (`MSG_CLOSE`, closing its tab), or nobody
+/// reattached within `detach_timeout`.
+async fn run_session(
+    pty: PtySession,
+    id: String,
+    mut cmd_rx: mpsc::Receiver<PtyCmd>,
+    state: Arc<AppState>,
+    slot: ClientSlot,
+) {
+    let cfg = &state.config;
+    let mut session = Session {
+        pty,
+        id,
+        out: None,
+        detached_at: None, // the connection that started it attaches next
+        detach_timeout: Duration::from_secs(cfg.detach_timeout),
+        log: OutputLog::default(),
+        coalesce: BytesMut::with_capacity(MAX_COALESCE_SIZE + 1),
+        echo: EchoAck::default(),
+        last_cwd: String::new(),
+        heartbeat: Duration::from_secs(cfg.ping_interval.max(1)),
+        inputs: 0,
+    };
+    session.coalesce.extend_from_slice(&[MSG_OUTPUT]);
+    session.run(&mut cmd_rx).await;
+
+    state.term_sessions.lock().remove(&session.id);
+    drop(session); // hangs up the shell; a still attached socket closes
     drop(slot);
-    let remaining = state.client_count.load(std::sync::atomic::Ordering::SeqCst);
-    tracing::info!(clients = remaining, "Terminal session ended");
+    let remaining = state.client_count.load(Ordering::SeqCst);
+    tracing::info!(sessions = remaining, "Terminal session ended");
 
     if cfg.once || (cfg.exit_no_conn && remaining == 0) {
         let reason = if cfg.once { "--once" } else { "--exit-no-conn" };
@@ -353,169 +488,336 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, slot: ClientSlot
     }
 }
 
-// ── PTY main loop ─────────────────────────────────────────────────────────────
+/// One shell and the connection attached to it, if any. See [`run_session`].
+struct Session {
+    pty: PtySession,
+    id: String,
+    /// The attached connection's id and outbound queue; `None` while detached.
+    out: Option<(u64, mpsc::Sender<Message>)>,
+    /// When the session was last left without a connection.
+    detached_at: Option<time::Instant>,
+    detach_timeout: Duration,
+    log: OutputLog,
+    /// Output read but not flushed yet, behind the `MSG_OUTPUT` type byte so
+    /// each flush is a single Binary frame with no header copy.
+    coalesce: BytesMut,
+    echo: EchoAck,
+    last_cwd: String,
+    heartbeat: Duration,
+    /// Input frames written to the shell, across connections: a reattaching
+    /// browser resends the ones after this.
+    inputs: u64,
+}
 
-/// Owns `PtySession`. Reads PTY output with a 1 ms coalesce window (up to
-/// 16 KiB per frame), handles incoming keystrokes/resize commands, and sends
-/// WebSocket keepalive pings — all in a single task.
-async fn pty_main_loop(
-    session: PtySession,
-    mut cmd_rx: mpsc::Receiver<PtyCmd>,
-    out_tx: mpsc::Sender<Message>,
-    ping_interval: Duration,
-) {
-    let mut buf = [0u8; PTY_BUF_SIZE];
-    // Pre-allocate the coalesce buffer with the MSG_OUTPUT type byte already
-    // at index 0, so each flush is a single Binary frame with no header copy.
-    let mut coalesce = BytesMut::with_capacity(MAX_COALESCE_SIZE + 1);
-    coalesce.extend_from_slice(&[MSG_OUTPUT]);
+impl Session {
+    /// Reads PTY output with a 1 ms coalesce window (up to 16 KiB per frame),
+    /// applies commands, sends echo acks and heartbeats while attached, and
+    /// ends a session left detached for too long — all in one task.
+    async fn run(&mut self, cmd_rx: &mut mpsc::Receiver<PtyCmd>) {
+        let mut buf = [0u8; PTY_BUF_SIZE];
+        let mut ping_ticker = time::interval(self.heartbeat);
+        // Default `Burst` would fire every tick missed during heavy output back to
+        // back, filling the small outbound queue with pings instead of output.
+        ping_ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        ping_ticker.tick().await; // discard the immediate first tick
 
-    let mut ping_ticker = time::interval(ping_interval);
-    // Default `Burst` would fire every tick missed during heavy output back to
-    // back, filling the small outbound queue with pings instead of output.
-    ping_ticker.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-    ping_ticker.tick().await; // discard the immediate first tick
+        'outer: loop {
+            let expires = self.detached_at.map(|at| at + self.detach_timeout);
+            let attached = self.out.is_some();
+            tokio::select! {
+                biased;
 
-    // Working-directory tracking for the explorer's auto-cd. Reported once up
-    // front so a client that enables auto-cd before running anything still knows
-    // where the shell started, then only when the path actually changes.
-    let mut last_cwd = String::new();
-    let mut echo = EchoAck::default();
-    if let Some(msg) = cwd_frame(&session, &mut last_cwd) {
-        if out_tx.send(msg).await.is_err() {
-            return;
+                // ── Client → PTY (keystrokes / resize / attach) ──────────────
+                cmd = cmd_rx.recv() => {
+                    if self.apply(cmd).await { break; }
+                },
+
+                // ── PTY → client (hot path) ───────────────────────────────────
+                res = self.pty.read(&mut buf) => match res {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        self.coalesce.extend_from_slice(&buf[..n]);
+
+                        // Accumulate further output within COALESCE_WINDOW before
+                        // flushing, up to MAX_COALESCE_SIZE.  The sleep is pinned
+                        // once per outer read, not re-created per inner iteration.
+                        if self.coalesce.len() < MAX_COALESCE_SIZE {
+                            let deadline = time::sleep(COALESCE_WINDOW);
+                            tokio::pin!(deadline);
+
+                            'inner: loop {
+                                tokio::select! {
+                                    biased;
+                                    cmd = cmd_rx.recv() => {
+                                        if self.apply(cmd).await { break 'outer; }
+                                    },
+                                    res = self.pty.read(&mut buf) => match res {
+                                        Ok(0) | Err(_) => {
+                                            self.flush(cmd_rx).await;
+                                            break 'outer;
+                                        }
+                                        Ok(n) => {
+                                            self.coalesce.extend_from_slice(&buf[..n]);
+                                            if self.coalesce.len() >= MAX_COALESCE_SIZE {
+                                                break 'inner;
+                                            }
+                                        }
+                                    },
+                                    _ = &mut deadline => break 'inner,
+                                }
+                            }
+                        }
+
+                        if self.flush(cmd_rx).await { break; }
+                        self.report_state().await;
+                    }
+                },
+
+                // ── Echo acknowledgement: after any output read above (biased) ──
+                _ = time::sleep_until(self.echo.due_at().unwrap_or_else(time::Instant::now)),
+                    if attached && self.echo.due_at().is_some() => {
+                    self.echo.ack_due();
+                    let msg = self.echo.frame(self.pty.hides_input());
+                    self.send(msg).await;
+                },
+
+                // ── Heartbeat (merged here — avoids another task) ────────────
+                // A data frame, not a WebSocket ping: tunnels that only count
+                // traffic inside the socket close it after a quiet spell
+                // otherwise, and the browser can't see pings to notice a dead
+                // connection. A full queue means frames are already flowing,
+                // so skip it rather than block keystrokes behind it.
+                _ = ping_ticker.tick(), if attached => {
+                    let closed = self.out.as_ref().is_some_and(|(_, tx)| {
+                        let beat = Message::Binary(Bytes::from_static(&[MSG_HEARTBEAT]));
+                        matches!(tx.try_send(beat), Err(mpsc::error::TrySendError::Closed(_)))
+                    });
+                    if closed { self.detach(); }
+                },
+
+                // ── Nobody reattached in time ─────────────────────────────────
+                _ = time::sleep_until(expires.unwrap_or_else(time::Instant::now)), if expires.is_some() => {
+                    tracing::info!("Detached terminal session expired");
+                    break;
+                },
+            }
         }
     }
 
-    'outer: loop {
-        tokio::select! {
-            biased;
-
-            // ── Client → PTY (keystrokes / resize) ───────────────────────────
-            cmd = cmd_rx.recv() => {
-                if apply_cmd(cmd, &session, &mut echo).await { break; }
-            },
-
-            // ── PTY → client (hot path) ───────────────────────────────────────
-            res = session.read(&mut buf) => match res {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    coalesce.extend_from_slice(&buf[..n]);
-
-                    // Accumulate further output within COALESCE_WINDOW before
-                    // flushing, up to MAX_COALESCE_SIZE.  The sleep is pinned
-                    // once per outer read, not re-created per inner iteration.
-                    if coalesce.len() < MAX_COALESCE_SIZE {
-                        let deadline = time::sleep(COALESCE_WINDOW);
-                        tokio::pin!(deadline);
-
-                        'inner: loop {
-                            tokio::select! {
-                                biased;
-                                cmd = cmd_rx.recv() => {
-                                    if apply_cmd(cmd, &session, &mut echo).await { break 'outer; }
-                                },
-                                res = session.read(&mut buf) => match res {
-                                    Ok(0) | Err(_) => {
-                                        flush_coalesce(&mut coalesce, &out_tx, &mut cmd_rx, &session, &mut echo).await;
-                                        break 'outer;
-                                    }
-                                    Ok(n) => {
-                                        coalesce.extend_from_slice(&buf[..n]);
-                                        if coalesce.len() >= MAX_COALESCE_SIZE {
-                                            break 'inner;
-                                        }
-                                    }
-                                },
-                                _ = &mut deadline => break 'inner,
-                            }
-                        }
-                    }
-
-                    if flush_coalesce(&mut coalesce, &out_tx, &mut cmd_rx, &session, &mut echo).await { break; }
-
-                    // A password prompt turns echo off as it is printed: tell
-                    // local echo right behind the prompt, not at the next key.
-                    let hidden = session.hides_input();
-                    if hidden != echo.hidden {
-                        let msg = echo.frame(hidden);
-                        if out_tx.send(msg).await.is_err() { break; }
-                    }
-
-                    // A finished output burst is the cheapest signal that a
-                    // command completed and the prompt was redrawn — the moment
-                    // the shell's cwd can have changed.
-                    if let Some(msg) = cwd_frame(&session, &mut last_cwd) {
-                        if out_tx.send(msg).await.is_err() { break; }
-                    }
+    /// Apply one command. Returns `true` if the session should end.
+    async fn apply(&mut self, cmd: Option<PtyCmd>) -> bool {
+        match cmd {
+            // `None`: impossible while registered, since the registry holds a sender.
+            None | Some(PtyCmd::Close) => true,
+            Some(PtyCmd::Input { conn, data }) => {
+                // Input still in flight from a connection that was replaced:
+                // the browser resends what the session hasn't counted.
+                if !self.out.as_ref().is_some_and(|(c, _)| *c == conn) {
+                    return false;
                 }
-            },
-
-            // ── Echo acknowledgement: after any output read above (biased) ──
-            _ = time::sleep_until(echo.due_at().unwrap_or_else(time::Instant::now)), if echo.due_at().is_some() => {
-                echo.ack_due();
-                let msg = echo.frame(session.hides_input());
-                if out_tx.send(msg).await.is_err() { break; }
-            },
-
-            // ── Keepalive ping (merged here — avoids a 4th task + ~64 KiB stack)
-            // A full queue means frames are already flowing, so the connection
-            // is alive; skip the ping rather than block keystrokes behind it.
-            _ = ping_ticker.tick() => {
-                if let Err(mpsc::error::TrySendError::Closed(_)) = out_tx.try_send(Message::Ping(Bytes::new())) {
-                    break;
+                if let Err(e) = self.pty.write(&data).await {
+                    tracing::error!("PTY write error: {}", e);
+                    return true;
                 }
-            },
+                self.inputs += 1;
+                self.echo.on_input();
+                false
+            }
+            Some(PtyCmd::Resize(cols, rows)) => {
+                if let Err(e) = self.pty.resize(rows, cols) {
+                    // Non-fatal: the terminal just won't reflow until the next resize.
+                    tracing::warn!("PTY resize error: {}", e);
+                }
+                false
+            }
+            Some(PtyCmd::Attach { conn, out, offset }) => {
+                self.attach(conn, out, offset).await;
+                false
+            }
+            Some(PtyCmd::Detach(conn)) => {
+                if self.out.as_ref().is_some_and(|(c, _)| *c == conn) {
+                    self.detach();
+                }
+                false
+            }
+        }
+    }
+
+    /// A connection takes over the session. The previous one, if any (the
+    /// same session opened elsewhere, or a connection that hasn't noticed it
+    /// dropped), is told why and closed. The client first learns which
+    /// session this is, then gets the output it doesn't have yet.
+    async fn attach(&mut self, conn: u64, out: mpsc::Sender<Message>, offset: Option<u64>) {
+        let resumed = offset.is_some();
+        if let Some((_, previous)) = self.out.take() {
+            // Behind the output still queued for it, without holding up the
+            // session. Dropped, the old window would see a plain close,
+            // reconnect, and take the session back.
+            let frame = CloseFrame { code: CLOSE_TAKEN_OVER, reason: "attached elsewhere".into() };
+            tokio::spawn(async move {
+                let _ = previous.send(Message::Close(Some(frame))).await;
+            });
+        }
+        self.out = Some((conn, out));
+        self.detached_at = None;
+        self.echo = EchoAck::default(); // input frames are numbered per connection
+        self.last_cwd.clear();
+
+        let offset = offset.unwrap_or(0);
+        let (start, missed, lost) = self.log.since(offset);
+        let flags = if resumed { SESSION_RESUMED } else { 0 } | if lost { SESSION_OUTPUT_LOST } else { 0 };
+        let heartbeat = u16::try_from(self.heartbeat.as_secs()).unwrap_or(u16::MAX);
+        let mut frame = BytesMut::with_capacity(self.id.len() + 20);
+        frame.extend_from_slice(&[MSG_SESSION, flags]);
+        frame.extend_from_slice(&heartbeat.to_be_bytes());
+        // Where the replay starts in the session's output, for the client's next offset.
+        frame.extend_from_slice(&start.to_be_bytes());
+        frame.extend_from_slice(&self.inputs.to_be_bytes());
+        frame.extend_from_slice(self.id.as_bytes());
+        self.send(Message::Binary(frame.freeze())).await;
+        for chunk in missed.chunks(MAX_COALESCE_SIZE) {
+            let mut frame = BytesMut::with_capacity(chunk.len() + 1);
+            frame.extend_from_slice(&[MSG_REPLAY]);
+            frame.extend_from_slice(chunk);
+            self.send(Message::Binary(frame.freeze())).await;
+        }
+        // A replay with a gap may have missed the start of a full-screen
+        // program (vim, htop), and a page reload starts from an empty screen:
+        // make the program redraw itself, as shpool does.
+        if resumed && (lost || (offset == 0 && self.log.in_alternate_screen())) {
+            self.pty.nudge_redraw();
+        }
+        self.report_state().await;
+    }
+
+    fn detach(&mut self) {
+        if self.out.take().is_some() {
+            self.detached_at = Some(time::Instant::now());
+        }
+    }
+
+    /// Send a frame to the attached connection, if any; a closed one detaches.
+    async fn send(&mut self, msg: Message) {
+        let closed = match &self.out {
+            Some((_, tx)) => tx.send(msg).await.is_err(),
+            None => false,
+        };
+        if closed {
+            self.detach();
+        }
+    }
+
+    /// Record the coalesced output for a reattach and send it to the attached
+    /// connection.
+    ///
+    /// While the outbound queue is full (client slower than the shell),
+    /// keystrokes keep being applied so Ctrl+C reaches the shell without
+    /// waiting for the backlog to drain.
+    ///
+    /// Returns `true` if the session should end.
+    async fn flush(&mut self, cmd_rx: &mut mpsc::Receiver<PtyCmd>) -> bool {
+        if self.coalesce.len() <= 1 {
+            return false;
+        }
+        let payload = self.coalesce.split().freeze();
+        self.coalesce.reserve(MAX_COALESCE_SIZE + 1);
+        self.coalesce.extend_from_slice(&[MSG_OUTPUT]);
+        self.log.push(&payload[1..]);
+        loop {
+            let Some((conn, tx)) = self.out.clone() else { return false };
+            tokio::select! {
+                biased;
+                cmd = cmd_rx.recv() => {
+                    if self.apply(cmd).await { return true; }
+                    // A connection that attached meanwhile got this output from the log.
+                    if self.out.as_ref().map(|(c, _)| *c) != Some(conn) { return false; }
+                },
+                permit = tx.reserve() => {
+                    match permit {
+                        Ok(p) => p.send(Message::Binary(payload)),
+                        Err(_) => self.detach(),
+                    }
+                    return false;
+                },
+            }
+        }
+    }
+
+    /// After output (the moment a command can have finished, or a password
+    /// prompt turned echo off), tell the attached client what changed: the
+    /// shell's working directory, and whether input is hidden.
+    async fn report_state(&mut self) {
+        if self.out.is_none() {
+            return;
+        }
+        if let Some(msg) = cwd_frame(&self.pty, &mut self.last_cwd) {
+            self.send(msg).await;
+        }
+        let hidden = self.pty.hides_input();
+        if hidden != self.echo.hidden {
+            let msg = self.echo.frame(hidden);
+            self.send(msg).await;
         }
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+/// Output kept for a reattach: the latest `OUTPUT_LOG_SIZE` bytes, and how
+/// many bytes the session has produced in all (clients count in the same unit).
+struct OutputLog {
+    buf: VecDeque<u8>,
+    total: u64,
+}
 
-/// Flush the coalesce buffer as a single `Binary` WebSocket frame.
-///
-/// Copies the accumulated data into a `Bytes` value and reuses the existing
-/// `Vec` allocation for the next coalesce window, avoiding a fresh 16 KiB
-/// allocation on every flush.
-///
-/// While the outbound queue is full (client slower than the shell), keystrokes
-/// keep being applied so Ctrl+C reaches the shell without waiting for the
-/// backlog to drain.
-///
-/// Returns `true` if the session should stop (outbound channel closed, client
-/// gone, or PTY write failed).
-async fn flush_coalesce(
-    coalesce: &mut BytesMut,
-    tx: &mpsc::Sender<Message>,
-    cmd_rx: &mut mpsc::Receiver<PtyCmd>,
-    session: &PtySession,
-    echo: &mut EchoAck,
-) -> bool {
-    if coalesce.len() <= 1 {
-        return false;
+impl Default for OutputLog {
+    /// Allocated once at full size: pages are only touched as output fills
+    /// it, and it never regrows, so a session holds at most `OUTPUT_LOG_SIZE`.
+    fn default() -> Self {
+        Self { buf: VecDeque::with_capacity(OUTPUT_LOG_SIZE), total: 0 }
     }
-    let permit = loop {
-        tokio::select! {
-            biased;
-            cmd = cmd_rx.recv() => {
-                if apply_cmd(cmd, session, echo).await { return true; }
-            },
-            permit = tx.reserve() => match permit {
-                Ok(p)  => break p,
-                Err(_) => return true,
-            },
+}
+
+impl OutputLog {
+    fn push(&mut self, data: &[u8]) {
+        let excess = (self.buf.len() + data.len()).saturating_sub(OUTPUT_LOG_SIZE);
+        self.buf.drain(..excess.min(self.buf.len()));
+        self.buf.extend(&data[data.len().saturating_sub(OUTPUT_LOG_SIZE)..]);
+        self.total += data.len() as u64;
+    }
+
+    /// The output after its first `offset` bytes: where in the output the
+    /// replay starts, the bytes, and whether part of what was asked for was
+    /// already dropped. A replay with a gap starts at the next line, not in the
+    /// middle of an escape sequence or a UTF-8 character.
+    fn since(&self, offset: u64) -> (u64, Vec<u8>, bool) {
+        let kept_from = self.total - self.buf.len() as u64;
+        let (skip, lost) = if offset >= kept_from {
+            ((offset.min(self.total) - kept_from) as usize, false)
+        } else {
+            (self.buf.iter().position(|&b| b == b'\n').map_or(self.buf.len(), |i| i + 1), true)
+        };
+        (kept_from + skip as u64, self.buf.range(skip..).copied().collect(), lost)
+    }
+
+    /// Whether the kept output last switched to the alternate screen (a
+    /// full-screen program still running) rather than back.
+    fn in_alternate_screen(&self) -> bool {
+        const MODES: [&[u8]; 3] = [b"\x1b[?1049", b"\x1b[?1047", b"\x1b[?47"];
+        let (front, back) = self.buf.as_slices();
+        // Scanning is rare (a page reload), so one contiguous copy is fine.
+        let log = [front, back].concat();
+        let mut last = None;
+        for i in (0..log.len()).filter(|&i| log[i] == 0x1b) {
+            if let Some(mode) = MODES.iter().find(|m| log[i..].starts_with(m)) {
+                last = log.get(i + mode.len()).copied();
+            }
         }
-    };
-    let payload = coalesce.split().freeze();
-    coalesce.reserve(MAX_COALESCE_SIZE + 1);
-    coalesce.extend_from_slice(&[MSG_OUTPUT]);
-    permit.send(Message::Binary(payload));
-    false
+        last == Some(b'h')
+    }
 }
 
 /// Build a `MSG_CWD` frame when the shell has moved to a different directory.
 ///
-/// Called once per output flush — the point at which a command has finished and
+/// Called after each output flush — the point at which a command has finished and
 /// the prompt has been redrawn. Returns `None` when the path is unchanged, so an
 /// unchanging cwd never puts a frame on the wire, and an idle terminal (no
 /// output, no flush) does no work at all.
@@ -530,28 +832,6 @@ fn cwd_frame(session: &PtySession, last: &mut String) -> Option<Message> {
     frame.extend_from_slice(cwd.as_bytes());
     *last = cwd;
     Some(Message::Binary(frame.freeze()))
-}
-
-/// Apply a `PtyCmd`. Returns `true` if the loop should exit.
-async fn apply_cmd(cmd: Option<PtyCmd>, session: &PtySession, echo: &mut EchoAck) -> bool {
-    match cmd {
-        None => true, // cmd_rx closed → ws_reader exited
-        Some(PtyCmd::Input(data)) => {
-            if let Err(e) = session.write(&data).await {
-                tracing::error!("PTY write error: {}", e);
-                return true;
-            }
-            echo.on_input();
-            false
-        }
-        Some(PtyCmd::Resize(cols, rows)) => {
-            if let Err(e) = session.resize(rows, cols) {
-                // Non-fatal: the terminal just won't reflow until the next resize.
-                tracing::warn!("PTY resize error: {}", e);
-            }
-            false
-        }
-    }
 }
 
 /// Check HTTP Basic Auth against a pre-built expected header value.
@@ -572,20 +852,28 @@ pub fn check_basic_auth(headers: &HeaderMap, expected: &str) -> bool {
 /// // ?arg=-c&arg=ls%20-la  →  vec!["-c", "ls -la"]
 /// ```
 fn parse_url_args(query: &str) -> Vec<String> {
-    if query.is_empty() {
-        return vec![];
+    query_pairs(query).filter(|(key, _)| *key == "arg").map(|(_, val)| percent_decode(val)).collect()
+}
+
+/// The session to reattach from `?resume=<id>&offset=<bytes>`: `offset` is
+/// how much of its output the client already has (0 or absent after a page
+/// reload).
+fn parse_resume(query: &str) -> Option<(String, u64)> {
+    let mut id = None;
+    let mut offset = 0;
+    for (key, val) in query_pairs(query) {
+        match key {
+            "resume" => id = Some(percent_decode(val)),
+            "offset" => offset = val.parse().ok()?,
+            _ => {}
+        }
     }
-    query
-        .split('&')
-        .filter_map(|pair| {
-            let (key, val) = pair.split_once('=')?;
-            if key == "arg" {
-                Some(percent_decode(val))
-            } else {
-                None
-            }
-        })
-        .collect()
+    id.map(|id| (id, offset))
+}
+
+/// The `key=value` pairs of a query string, values still percent-encoded.
+fn query_pairs(query: &str) -> impl Iterator<Item = (&str, &str)> {
+    query.split('&').filter_map(|pair| pair.split_once('='))
 }
 
 /// Percent-decode a URL query value (replaces `%XX` sequences and `+` → space).
@@ -630,6 +918,102 @@ fn hex_val(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_log_replays_what_a_client_missed() {
+        let mut log = OutputLog::default();
+        log.push(b"one\ntwo\n");
+        assert_eq!(log.since(4), (4, b"two\n".to_vec(), false), "a reconnect gets only the rest");
+        assert_eq!(log.since(8), (8, vec![], false), "nothing missed");
+        assert_eq!(log.since(99), (8, vec![], false), "an offset past the end replays nothing");
+        assert_eq!(log.since(0), (0, b"one\ntwo\n".to_vec(), false), "a page reload gets everything kept");
+
+        let mut full = OutputLog::default();
+        let capacity = full.buf.capacity();
+        full.push(&vec![b'x'; OUTPUT_LOG_SIZE]);
+        let tail = b"\x1b[31mred\nnext\n";
+        full.push(tail);
+        assert_eq!(full.total, (OUTPUT_LOG_SIZE + tail.len()) as u64);
+        assert_eq!(full.buf.len(), OUTPUT_LOG_SIZE);
+        assert_eq!(full.buf.capacity(), capacity, "the log never regrows");
+        let (start, replay, lost) = full.since(0);
+        assert!(lost);
+        assert_eq!(replay, b"next\n", "a replay with a gap starts at a line, not mid-sequence");
+        assert_eq!(start, full.total - replay.len() as u64, "the client learns where it starts");
+    }
+
+    #[test]
+    fn output_log_knows_when_a_full_screen_program_is_running() {
+        let mut log = OutputLog::default();
+        log.push(b"$ vim\r\n\x1b[?1049h\x1b[H~");
+        assert!(log.in_alternate_screen());
+        log.push(b"\x1b[?1049l$ ");
+        assert!(!log.in_alternate_screen());
+        log.push(b"\x1b[?47h");
+        assert!(log.in_alternate_screen());
+    }
+
+    #[test]
+    fn resume_query_names_the_session_and_offset() {
+        assert_eq!(parse_resume("resume=abc&offset=42"), Some(("abc".into(), 42)));
+        assert_eq!(parse_resume("arg=ls&resume=abc"), Some(("abc".into(), 0)), "a page reload has no offset");
+        assert_eq!(parse_resume("arg=ls"), None);
+        assert_eq!(parse_resume("resume=abc&offset=-1"), None, "a bad offset doesn't resume");
+    }
+
+    /// A second connection takes the session over: the first is told why,
+    /// and its late `Detach` and input leave the second attached and
+    /// untouched. A reattach learns how much input was applied, and
+    /// `MSG_CLOSE` ends the session.
+    #[tokio::test]
+    async fn a_session_moves_to_the_newest_connection() {
+        let state = state_with(AppConfig { shell: "/bin/sh".into(), ..Default::default() });
+        let slot = ClientSlot::acquire(&state).unwrap();
+        let cmds = start_session(&state, slot, None, &[]).unwrap();
+        let (first_tx, mut first) = mpsc::channel(64);
+        let (second_tx, mut second) = mpsc::channel(64);
+        cmds.send(PtyCmd::Attach { conn: 1, out: first_tx, offset: None }).await.unwrap();
+        cmds.send(PtyCmd::Attach { conn: 2, out: second_tx, offset: Some(0) }).await.unwrap();
+        cmds.send(PtyCmd::Detach(1)).await.unwrap();
+        cmds.send(PtyCmd::Input { conn: 1, data: Bytes::from_static(b"echo stale\n") }).await.unwrap();
+        cmds.send(PtyCmd::Input { conn: 2, data: Bytes::from_static(b"echo still-$((1+1))\n") }).await.unwrap();
+
+        let taken_over = time::timeout(Duration::from_secs(5), async {
+            while let Some(msg) = first.recv().await {
+                if let Message::Close(Some(frame)) = msg {
+                    return frame.code;
+                }
+            }
+            0
+        });
+        assert_eq!(taken_over.await.expect("the takeover"), CLOSE_TAKEN_OVER);
+
+        let mut output = Vec::new();
+        let echoed = time::timeout(Duration::from_secs(5), async {
+            while let Some(Message::Binary(frame)) = second.recv().await {
+                if frame[0] == MSG_OUTPUT {
+                    output.extend_from_slice(&frame[1..]);
+                    if output.windows(7).any(|w| w == b"still-2") {
+                        return;
+                    }
+                }
+            }
+            panic!("session ended early");
+        });
+        echoed.await.expect("output on the new connection");
+        assert!(!output.windows(5).any(|w| w == b"stale"), "input from a replaced connection is dropped");
+
+        let (third_tx, mut third) = mpsc::channel(64);
+        cmds.send(PtyCmd::Attach { conn: 3, out: third_tx, offset: Some(u64::MAX) }).await.unwrap();
+        let Some(Message::Binary(frame)) = third.recv().await else { panic!("session frame") };
+        assert_eq!(frame[0], MSG_SESSION);
+        assert_eq!(u64::from_be_bytes(frame[12..20].try_into().unwrap()), 1, "the session counts input it applied");
+
+        cmds.send(PtyCmd::Close).await.unwrap();
+        let ended = time::timeout(Duration::from_secs(5), async { while third.recv().await.is_some() {} });
+        ended.await.expect("the session to end");
+        assert!(state.term_sessions.lock().is_empty(), "an ended session is unregistered");
+    }
 
     #[test]
     fn echo_ack_covers_input_the_shell_had_time_to_answer() {
@@ -677,6 +1061,7 @@ mod tests {
             shutdown_tx: tokio::sync::watch::channel(false).0,
             expected_auth: None,
             custom_index: None,
+            term_sessions: Default::default(),
             mcp_transmitters: Default::default(),
             watch_sessions: Default::default(),
             lsp: Default::default(),
