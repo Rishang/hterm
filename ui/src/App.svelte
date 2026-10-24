@@ -6,7 +6,7 @@
   import SettingsWindow from "./SettingsWindow.svelte";
   import CommandPalette from "./CommandPalette.svelte";
   import GlobalSearch from "./GlobalSearch.svelte";
-  import { fileIcon, isImage } from "./fileIcon.js";
+  import { fileIcon, hasImageIcon, isImage } from "./fileIcon.js";
   import { localEchoMode } from "./localEcho.js";
 
   const basePath = import.meta.env.DEV ? "" : window.location.pathname.replace(/\/$/, "");
@@ -650,6 +650,12 @@
             onkeydown={(e) => e.key === "Enter" && (activeTab = tab.id)}>
             {#if icon}
               <span class="tab-file-badge" style:background={icon.bg} style:color={icon.color}>{icon.label}</span>
+            {:else if hasImageIcon(tab.name)}
+              <svg class="tab-icon-svg" width="12" height="12" viewBox="0 0 16 16" fill="none">
+                <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="var(--accent-purple)" stroke-width="1.3"/>
+                <circle cx="5.75" cy="6.25" r="1.1" fill="var(--accent-yellow)"/>
+                <path d="M2.7 12l3.8-3.8 2.3 2.3 1.7-1.7 2.8 2.8" stroke="var(--accent-green)" stroke-width="1.3" stroke-linejoin="round" fill="none"/>
+              </svg>
             {:else}
               <svg class="tab-icon-svg" width="12" height="12" viewBox="0 0 16 16" fill="none">
                 <path d="M4 2h5.5L12 4.5V14H4V2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>

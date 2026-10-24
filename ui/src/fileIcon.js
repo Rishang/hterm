@@ -37,6 +37,9 @@ export const EXT_ICONS = {
 /** Raster images open straight in the image viewer, skipping the size-capped text read. */
 export const isImage = (path) => /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path);
 
+/** Files shown with a picture icon: raster images and SVG. */
+export const hasImageIcon = (name) => isImage(name) || /\.svg$/i.test(name);
+
 /** @param {string} name @returns {{label:string,bg:string,color:string}|null} */
 export function fileIcon(name) {
   const lower = name.toLowerCase();

@@ -1,7 +1,7 @@
 <script>
   import { onDestroy } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
-  import { fileIcon } from "./fileIcon.js";
+  import { fileIcon, hasImageIcon } from "./fileIcon.js";
   import { placeContextMenu } from "./contextMenu.js";
 
   /** @type {{ activeTab: string, openFileByPath: Function, visible?: boolean, autoCd?: boolean, terminalCwd?: string, root?: string }} */
@@ -957,6 +957,12 @@
       <span class="fm-chevron-spacer"></span>
       {#if icon}
         <span class="fm-ext-badge" style:background={icon.bg} style:color={icon.color}>{icon.label}</span>
+      {:else if hasImageIcon(node.name)}
+        <svg class="fm-file-icon-svg" width="13" height="13" viewBox="0 0 16 16" fill="none">
+          <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="var(--accent-purple)" stroke-width="1.3"/>
+          <circle cx="5.75" cy="6.25" r="1.1" fill="var(--accent-yellow)"/>
+          <path d="M2.7 12l3.8-3.8 2.3 2.3 1.7-1.7 2.8 2.8" stroke="var(--accent-green)" stroke-width="1.3" stroke-linejoin="round" fill="none"/>
+        </svg>
       {:else}
         <svg class="fm-file-icon-svg" width="13" height="13" viewBox="0 0 16 16" fill="none">
           <path d="M4 2h5.5L12 4.5V14H4V2z" stroke="var(--text-subtle)" stroke-width="1.3" stroke-linejoin="round"/>
